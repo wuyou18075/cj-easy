@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-#             ⚡ cj 全能系统管理与证书脚本 (现场调试版) ⚡
+#             ⚡ cj 全能系统管理与证书脚本 (终极交互版) ⚡
 # =========================================================
 
 # 1. 脚本全局常量定义
@@ -126,7 +126,7 @@ menu_certificate_management() {
             echo "========================================================="
             echo "             📂 请选择证书分发目标路径"
             echo "========================================================="
-            echo "1) 默认当前用户家目录 (~/.acme.sh/${MAIN_DOMAIN}_ecc/)"
+            echo "1) 默认当前 user 家目录 (~/.acme.sh/${MAIN_DOMAIN}_ecc/)"
             echo "2) 原生 Nginx 规范证书目录 (/etc/nginx/ssl/${MAIN_DOMAIN}/)"
             echo "3) 自定义输入任意绝对路径"
             echo "========================================================="
@@ -288,32 +288,7 @@ menu_nginx_management() {
             fi
 
             while true; do
-                clear
-                echo "========================================================="
-                echo "📋 \"输入的域名的\"反向代理列表(默认50个)："
-                echo "========================================================="
-                COUNT=0
-                if [ -d "/etc/nginx/conf.d" ]; then
-                    for conf_file in /etc/nginx/conf.d/*.conf; do
-                        if [ -f "$conf_file" ] && [ $COUNT -lt 50 ]; then
-                            EXTRACT_PASS=$(grep -oP 'proxy_pass \K[^;]+' "$conf_file" | head -n 1 | sed 's/http:\/\///')
-                            EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
-                            if [ -n "$EXTRACT_PASS" ] && [ -n "$EXTRACT_DOMAIN" ]; then
-                                echo " 📍 $EXTRACT_PASS  ──►  $EXTRACT_DOMAIN"
-                                let COUNT++
-                            fi
-                        fi
-                    done
-                fi
-                if [ $COUNT -eq 0 ]; then
-                    echo "   (暂无已配置的自定义反向代理配置)"
-                fi
-                echo "1 一键监测无效代理,监测出来后给个是否删除无效"
-                echo "2 列出全部反向代理,选不同域名分组列出的"
-                echo "========================================================="
-                echo "📋 请选择当前电脑中有效域名的序号："
-                echo "========================================================="
-                
+                # 预先扫描获取有效的已签发主域名
                 VALID_DOMAINS=()
                 if [ -d "/etc/nginx/ssl" ]; then
                     for dir in /etc/nginx/ssl/*; do
@@ -322,16 +297,128 @@ menu_nginx_management() {
                         fi
                     done
                 fi
-                
-                for i in "${!VALID_DOMAINS[@]}"; do
-                    echo "$((i+1))) ${VALID_DOMAINS[$i]}"
-                done
+
+                clear
+                echo "========================================================="
+                echo "📋 请选择当前电脑中有效域名的序号："
+                # 1. 第一区块：优先列出可用域名序号
+                if [ ${#VALID_DOMAINS[@]} -eq 0 ]; then
+                    echo "   (⚠️ 系统内未在 /etc/nginx/ssl/ 下检测到有效证书目录！)"
+                else
+                    for i in "${!VALID_DOMAINS[@]}"; do
+                        echo "  $((i+1)) ${VALID_DOMAINS[$i]}"
+                    done
+                fi
+                echo ""
+
+                # 2. 第二区块：大展示默认50个真实反代配置清单
+                echo "📋 \"输入的域名的\"反向代理列表(默认50个)："
+                COUNT=0
+                if [ -d "/etc/nginx/conf.d" ]; then
+                    for conf_file in /etc/nginx/conf.d/*.conf; do
+                        if [ -f "$conf_file" ] && [ $COUNT -lt 50 ]; then
+                            EXTRACT_PASS=$(grep -oP 'proxy_pass \K[^;]+' "$conf_file" | head -n 1 | sed 's/http:\/\///')
+                            EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
+                            if [ -n "$EXTRACT_PASS" ] && [ -n "$EXTRACT_DOMAIN" ]; then
+                                echo "  📍 $EXTRACT_PASS  ──►  $EXTRACT_DOMAIN"
+                                let COUNT++
+                            fi
+                        fi
+                    done
+                fi
+                if [ $COUNT -eq 0 ]; then
+                    echo "   (暂无已配置的自定义反向代理配置)"
+                fi
+                echo ""
+
+                # 3. 第三区块：标准管理功能选项字母化
+                echo "a 列出全部反向代理,(后续按1选不同域名编号,专门列出的那个域名的或者2列出全部域名)"
+                echo "c 一键监测无效代理,监测出来后给个是否删除无效"
                 echo "========================================================="
                 read -p "请输入域名对应的序号或操作编号 [0 返回]: " USER_CHOOSE
 
                 if [ "$USER_CHOOSE" == "0" ] || [ -z "$USER_CHOOSE" ]; then
                     break
-                elif [ "$USER_CHOOSE" == "1" ]; then
+                
+                elif [ "$USER_CHOOSE" == "a" ] || [ "$USER_CHOOSE" == "A" ]; then
+                    # 🛠️ 核心进化：多域名分组与专项按域名筛选逻辑
+                    clear
+                    echo "========================================================="
+                    echo "   🔍 请选择列出反向代理的展现模式："
+                    echo "========================================================="
+                    echo "1) 选不同域名编号, 专门列出所选域名的专属反代"
+                    echo "2) 列出全部分组域名资产一览"
+                    echo "========================================================="
+                    read -p "请输入子选项 [1-2]: " SUB_A_OPTION
+                    
+                    if [ "$SUB_A_OPTION" == "1" ]; then
+                        clear
+                        echo "========================================================="
+                        echo "🎯 请选择您要单独专项排查的目标根域名："
+                        echo "========================================================="
+                        for i in "${!VALID_DOMAINS[@]}"; do
+                            echo "  $((i+1))) ${VALID_DOMAINS[$i]}"
+                        done
+                        echo "========================================================="
+                        read -p "请输入域名编号: " TARGET_SUB_IDX
+                        
+                        if [[ "$TARGET_SUB_IDX" =~ ^[0-9]+$ ]] && [ "$TARGET_SUB_IDX" -le "${#VALID_DOMAINS[@]}" ] && [ "$TARGET_SUB_IDX" -gt 0 ]; then
+                            FILTER_DOMAIN="${VALID_DOMAINS[$((TARGET_SUB_IDX-1))]}"
+                            clear
+                            echo "========================================================="
+                            echo -e "🔎 正在专项列出属于根域名 [\e[32m$FILTER_DOMAIN\e[0m] 的反代明细："
+                            echo "========================================================="
+                            ANY_F=0
+                            if [ -d "/etc/nginx/conf.d" ]; then
+                                for conf_file in /etc/nginx/conf.d/*.conf; do
+                                    if [ -f "$conf_file" ]; then
+                                        EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
+                                        if [[ "$EXTRACT_DOMAIN" == *"$FILTER_DOMAIN"* ]]; then
+                                            ANY_F=1
+                                            EXTRACT_PASS=$(grep -oP 'proxy_pass \K[^;]+' "$conf_file" | head -n 1 | sed 's/http:\/\///')
+                                            echo "   📍 $EXTRACT_PASS  ──►  $EXTRACT_DOMAIN"
+                                        fi
+                                    fi
+                                done
+                            fi
+                            if [ $ANY_F -eq 0 ]; then
+                                echo "   (该域名下目前没有挂载任何反代子配置)"
+                            fi
+                            echo "========================================================="
+                        else
+                            echo "❌ 输入编号有误。"
+                        fi
+                    elif [ "$SUB_A_OPTION" == "2" ]; then
+                        clear
+                        echo "========================================================="
+                        echo "📋 全网反向代理资产大盘点 (按根域名分组归类)："
+                        echo "========================================================="
+                        if [ -d "/etc/nginx/conf.d" ]; then
+                            for root_d in "${VALID_DOMAINS[@]}"; do
+                                echo -e "\n📂 根域名归属: \e[36m$root_d\e[0m"
+                                echo "--------------------------------------------------------"
+                                ANY_MATCH=0
+                                for conf_file in /etc/nginx/conf.d/*.conf; do
+                                    if [ -f "$conf_file" ]; then
+                                        EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
+                                        if [[ "$EXTRACT_DOMAIN" == *"$root_d"* ]]; then
+                                            ANY_MATCH=1
+                                            EXTRACT_PASS=$(grep -oP 'proxy_pass \K[^;]+' "$conf_file" | head -n 1 | sed 's/http:\/\///')
+                                            echo "   📍 $EXTRACT_PASS  ──►  $EXTRACT_DOMAIN"
+                                        fi
+                                    fi
+                                done
+                                if [ $ANY_MATCH -eq 0 ]; then
+                                    echo "   (该域名下暂未挂载任何反代子配置文件)"
+                                fi
+                            done
+                        fi
+                        echo "========================================================="
+                    fi
+                    read -p "操作完毕。按回车键继续..." temp
+                    continue
+
+                elif [ "$USER_CHOOSE" == "c" ] || [ "$USER_CHOOSE" == "C" ]; then
                     clear
                     echo "🔍 正在对全盘反向代理进行服务可用性探针监测..."
                     echo "========================================================="
@@ -352,49 +439,22 @@ menu_nginx_management() {
                                     else
                                         echo "🟢 健康反代：$EXTRACT_DOMAIN ──► $EXTRACT_PASS (状态码: $CHECK_CODE)"
                                     fi
-                                fi
+                               fi
                             fi
                         done
                     fi
                     sudo nginx -t &>/dev/null && sudo systemctl reload nginx &>/dev/null
                     read -p "监测处理完毕。按回车键继续..." temp
                     continue
-                elif [ "$USER_CHOOSE" == "2" ]; then
-                    clear
-                    echo "========================================================="
-                    echo "📋 全网反向代理资产大盘点 (按根域名分组归类)："
-                    echo "========================================================="
-                    if [ -d "/etc/nginx/conf.d" ]; then
-                        for root_d in "${VALID_DOMAINS[@]}"; do
-                            echo -e "\n📂 根域名归属: \e[36m$root_d\e[0m"
-                            echo "--------------------------------------------------------"
-                            ANY_MATCH=0
-                            for conf_file in /etc/nginx/conf.d/*.conf; do
-                                if [ -f "$conf_file" ]; then
-                                    EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
-                                    if [[ "$EXTRACT_DOMAIN" == *"$root_d"* ]]; then
-                                        ANY_MATCH=1
-                                        EXTRACT_PASS=$(grep -oP 'proxy_pass \K[^;]+' "$conf_file" | head -n 1 | sed 's/http:\/\///')
-                                        echo "   📍 $EXTRACT_PASS  ──►  $EXTRACT_DOMAIN"
-                                    fi
-                                fi
-                            done
-                            if [ $ANY_MATCH -eq 0 ]; then
-                                echo "   (该域名下暂未挂载任何反代子配置文件)"
-                            fi
-                        done
-                    fi
-                    echo "========================================================="
-                    read -p "按回车键继续..." temp
-                    continue
                 fi
 
+                # 正常走数字域名序号配置逻辑
                 DOMAIN_INDEX=$USER_CHOOSE
                 if [[ "$DOMAIN_INDEX" =~ ^[0-9]+$ ]] && [ "$DOMAIN_INDEX" -le "${#VALID_DOMAINS[@]}" ] && [ "$DOMAIN_INDEX" -gt 0 ]; then
                     ROOT_DOMAIN="${VALID_DOMAINS[$((DOMAIN_INDEX-1))]}"
                 else
-                    echo "❌ 序号选择错误！"
-                    sleep 1
+                    echo "❌ 选项输入错误，请重试！"
+                    sleep 1.5
                     continue
                 fi
 
@@ -421,7 +481,6 @@ menu_nginx_management() {
                     LOCAL_PRIVATE_IP="127.0.0.1"
                 fi
 
-                # 🛠️ 现场抓脏改进：无论如何先写入文件，给足证据！
                 sudo mkdir -p /etc/nginx/conf.d
                 echo "server {
     listen 80;
@@ -452,7 +511,6 @@ server {
 }" | sudo tee "$CONF_FILE_PATH" > /dev/null
 
                 echo "⏳ 正在对新写的反代文件进行 Nginx 核心语法校验..."
-                # 🛠️ 现场抓脏改进：直接打印真实的报错，不再静默隐藏！
                 sudo nginx -t
                 NGINX_TEST_RC=$?
 
@@ -474,9 +532,7 @@ server {
                 else
                     echo "========================================================="
                     echo "❌ 【Nginx 语法校验失败！】"
-                    echo "💡 调试铁证：请仔细阅读上方 Nginx 吐出的报错日志！"
-                    echo "📌 极大可能是因为 /etc/nginx/ssl/$ROOT_DOMAIN/ 下面缺少有效的证书文件导致 Nginx 拒绝载入！"
-                    echo "⚠️ 为了防止系统瘫痪，该错误文件已被强行保留，您可以退出脚本执行 cat 或 vim 去肉搏排查。"
+                    echo "⚠️ 为了防止系统瘫痪，该错误文件已被强行保留，您可以去肉搏排查。"
                     echo "========================================================="
                 fi
                 read -p "按回车键继续..." temp
