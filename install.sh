@@ -1,14 +1,28 @@
 #!/bin/bash
 
 # =========================================================
-#             ⚡ 域名证书全能管理脚本 (完整交互版) ⚡
+#             ⚡ cj 全能系统管理与证书脚本 ⚡
 # =========================================================
 
 # 1. 脚本全局常量定义
 ONLINE_SCRIPT_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/install.sh"
 LOCAL_SCRIPT_PATH="/usr/local/bin/cj"
 
-# 2. 核心功能：脚本完全卸载逻辑函数
+# 2. 核心功能：在线检查并更新本地脚本函数
+perform_update() {
+    echo "🔄 正在检查在线版本并同步更新..."
+    curl -s -m 5 "$ONLINE_SCRIPT_URL" > /tmp/cj_new.sh
+    if [ -s /tmp/cj_new.sh ]; then
+        sudo mv /tmp/cj_new.sh "$LOCAL_SCRIPT_PATH"
+        sudo chmod +x "$LOCAL_SCRIPT_PATH"
+        echo "✅ 脚本已成功同步至最新版本！正在重新载入..."
+        exec "$LOCAL_SCRIPT_PATH" --no-update
+    else
+        echo "❌ 无法连接到 GitHub 更新源，更新失败，请检查网络。"
+    fi
+}
+
+# 3. 核心功能：脚本完全卸载逻辑函数
 perform_uninstall() {
     echo "🚨 正在准备完全卸载 cj 脚本及相关配置..."
     if [ -f "$LOCAL_SCRIPT_PATH" ]; then
@@ -21,217 +35,336 @@ perform_uninstall() {
     exit 0
 }
 
-# 3. 核心功能：在线检查并更新本地脚本函数
-perform_update() {
-    echo "🔄 正在检查在线版本并同步更新..."
-    curl -s -m 5 "$ONLINE_SCRIPT_URL" > /tmp/cj_new.sh
-    if [ -s /tmp/cj_new.sh ]; then
-        sudo mv /tmp/cj_new.sh "$LOCAL_SCRIPT_PATH"
-        sudo chmod +x "$LOCAL_SCRIPT_PATH"
-        echo "✅ 脚本已成功同步至最新版本！正在重新载入..."
-        exec "$LOCAL_SCRIPT_PATH" --no-update
-    else
-        echo "❌ 无法连接到 GitHub 更新源，更新失败，请检查 network。"
+# 4. 环境依赖与 acme.sh 自动化检测安装检测
+check_acme_env() {
+    for cmd in curl socat cron; do
+        if ! command -v $cmd &> /dev/null; then
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update && sudo apt-get install -y $cmd
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y $cmd
+            fi
+        fi
+    done
+    if command -v systemctl &> /dev/null; then
+        sudo systemctl enable cron 2>/dev/null || sudo systemctl enable crond 2>/dev/null
+        sudo systemctl start cron 2>/dev/null || sudo systemctl start crond 2>/dev/null
+    fi
+    if [ ! -f "$HOME/.acme.sh/acme.sh" ]; then
+        curl https://get.acme.sh | sh -s email=my@971211.xyz
+        source "$HOME/.acme.sh/acme.sh.env" 2>/dev/null
     fi
 }
 
-# 4. 环境依赖与 acme.sh 自动化检测安装
-echo "🔍 正在检查系统依赖环境..."
-for cmd in curl socat cron; do
-    if ! command -v $cmd &> /dev/null; then
-        echo "📦 正在安装缺失的依赖: $cmd ..."
-        if command -v apt-get &> /dev/null; then
-            sudo apt-get update && sudo apt-get install -y $cmd
-        elif command -v yum &> /dev/null; then
-            sudo yum install -y $cmd
+# 5. 专属子函数：证书管理二级菜单
+menu_certificate_management() {
+    while true; do
+        check_acme_env
+        PORT_80_CHECK=$(ss -lptn | grep -q ":80 " && echo "【已占用】" || echo "【未占用】")
+        clear
+        echo "========================================================="
+        echo "80 端口: $PORT_80_CHECK"
+        echo "有效证书: "
+        if [ -d "/etc/nginx/ssl" ]; then
+            ls /etc/nginx/ssl/ 2>/dev/null
+        else
+            echo "暂无"
         fi
-    fi
-done
+        echo "自动续签: 正常"
+        echo "========================================================="
+        echo "请选择操作："
+        echo "1) 申请证书 ⭐(含 80/Cloudflare 模式)"
+        echo "3) 证书续签与维护 "
+        echo "4) 查看证书路径 "
+        echo "5) 临时释放 80 端口"
+        echo "6) 恢复 80 端口 (重新启动被关闭的服务)"
+        echo "00) 退出脚本"
+        echo "0) 返回上一层"
+        echo "========================================================="
+        read -p "请输入选项: " CERT_OPTION
 
-# 启动并使能定时任务服务
-if command -v systemctl &> /dev/null; then
-    sudo systemctl enable cron 2>/dev/null || sudo systemctl enable crond 2>/dev/null
-    sudo systemctl start cron 2>/dev/null || sudo systemctl start crond 2>/dev/null
-fi
+        if [ "$CERT_OPTION" == "1" ]; then
+            clear
+            echo "========================================================="
+            echo "             🔑 请选择证书申请验证模式"
+            echo "========================================================="
+            echo "1) 80 端口模式 ⭐(推荐)"
+            echo "2) Cloudflare 模式 (使用 DNS API)"
+            echo "========================================================="
+            read -p "请选择验证模式 [1-2]: " MODE_OPTION
 
-# 检测并安装 acme.sh
-if [ ! -f "$HOME/.acme.sh/acme.sh" ]; then
-    echo "🚀 正在安装核心组件 acme.sh ..."
-    curl https://get.acme.sh | sh -s email=my@971211.xyz
-    source "$HOME/.acme.sh/acme.sh.env" 2>/dev/null
-fi
+            echo ""
+            echo "💡 【域名输入指引说明】"
+            echo "   - 如果只需要申请【单个域名】，直接输入即可（例：arm.971211.xyz）"
+            echo "   - 如果需要同时申请【多个域名】或【包含泛域名】，请务必使用【英文逗号】隔开"
+            echo "   - 规范示例：arm.971211.xyz,*.arm.971211.xyz"
+            echo ""
+            read -p "请输入您的域名组合: " DOMAINS
+            
+            if [ -z "$DOMAINS" ]; then
+                echo "❌ 域名不能为空！"
+                sleep 2
+                continue
+            fi
 
-# 5. 获取当前 80 端口真实占用状态
-PORT_80_CHECK=$(ss -lptn | grep -q ":80 " && echo "【已占用】" || echo "【未占用】")
+            MAIN_DOMAIN=$(echo "$DOMAINS" | cut -d',' -f1)
+            DOMAIN_PARAMS=""
+            IFS=',' read -ra ADDR <<< "$DOMAINS"
+            for i in "${ADDR[@]}"; do
+                DOMAIN_PARAMS="$DOMAIN_PARAMS -d $i"
+            done
 
-# 6. 打印脚本主菜单界面
-clear
-echo "========================================================="
-echo "             ⚡ 域名证书全能管理脚本 ⚡"
-echo "========================================================="
-echo "80 端口: $PORT_80_CHECK"
-if [ -d "$HOME/.acme.sh" ]; then
-    echo "有效证书列表: （可进入对应选项 4 进行全列出查看）"
-else
-    echo "有效证书列表: 未检测到已签发证书"
-fi
-echo "自动续签: 正常"
-echo "========================================================="
-echo "请选择操作："
-echo "1) 域名证书申请模块 ⭐(含 80/Cloudflare 模式)"
-echo "2) 检查并更新本地 cj 脚本"
-echo "3) 证书续签与维护 (支持一键清理失效证书)"
-echo "4) 查看证书路径 (多个域名时全列出来)"
-echo "5) 临时释放 80 端口"
-echo "6) 恢复 80 端口 (重新启动被关闭的服务)"
-echo "7) 注册/修复系统快捷命令 cj"
-echo "8) 彻底卸载 cj 快捷命令及定时任务"
-echo "0) 退出脚本"
-echo "========================================================="
+            echo ""
+            echo "========================================================="
+            echo "             📂 请选择证书分发目标路径"
+            echo "========================================================="
+            echo "1) 默认当前用户家目录 (~/.acme.sh/${MAIN_DOMAIN}_ecc/)"
+            echo "2) 原生 Nginx 规范证书目录 (/etc/nginx/ssl/${MAIN_DOMAIN}/)"
+            echo "3) 自定义输入任意绝对路径"
+            echo "========================================================="
+            read -p "请选择路径模式 [1-3]: " PATH_OPTION
 
-read -p "请输入选项 [0-8]: " OPTION
+            if [ "$PATH_OPTION" == "1" ]; then
+                TARGET_DIR="$HOME/.acme.sh/${MAIN_DOMAIN}_ecc"
+            elif [ "$PATH_OPTION" == "2" ]; then
+                TARGET_DIR="/etc/nginx/ssl/${MAIN_DOMAIN}"
+            elif [ "$PATH_OPTION" == "3" ]; then
+                read -p "请输入自定义绝对路径: " TARGET_DIR
+            else
+                TARGET_DIR="/etc/nginx/ssl/${MAIN_DOMAIN}"
+            fi
 
-# 7. 根据用户选择执行对应的业务逻辑
-if [ "$OPTION" == "1" ]; then
+            if [ "$MODE_OPTION" == "1" ]; then
+                echo "▶️ 正在通过 80 端口模式申请证书..."
+                sudo systemctl stop nginx 2>/dev/null || true
+                "$HOME/.acme.sh/acme.sh" --issue --standalone $DOMAIN_PARAMS --server letsencrypt
+                sudo systemctl start nginx 2>/dev/null || true
+            else
+                echo "▶️ 正在通过 Cloudflare DNS API 模式申请证书..."
+                read -p "请输入您的 Cloudflare API Token: " CF_TOKEN
+                export CF_Token="$CF_TOKEN"
+                "$HOME/.acme.sh/acme.sh" --issue --dns dns_cf $DOMAIN_PARAMS --server letsencrypt
+            fi
+
+            if [ -f "$HOME/.acme.sh/${MAIN_DOMAIN}_ecc/${MAIN_DOMAIN}.key" ]; then
+                echo "🎉 证书签发完成！正在分发到目标目录..."
+                sudo mkdir -p "$TARGET_DIR"
+                "$HOME/.acme.sh/acme.sh" --install-cert $DOMAIN_PARAMS \
+                    --key-file "${TARGET_DIR}/${MAIN_DOMAIN}.key" \
+                    --fullchain-file "${TARGET_DIR}/${MAIN_DOMAIN}.crt"
+                echo "✅ 证书已成功同步至: ${TARGET_DIR}/"
+                if [[ "$TARGET_DIR" == *nginx* ]]; then
+                    sudo nginx -t && sudo systemctl reload nginx 2>/dev/null || true
+                fi
+            else
+                echo "❌ 证书签发存在异常，请检查日志。"
+            fi
+            read -p "按回车键继续..." temp
+
+        elif [ "$CERT_OPTION" == "3" ]; then
+            echo "正在强制触发证书自动续签与维护..."
+            "$HOME/.acme.sh/acme.sh" --cron --home "$HOME/.acme.sh"
+            sudo nginx -t && sudo systemctl reload nginx 2>/dev/null || true
+            read -p "按回车键继续..." temp
+
+        elif [ "$CERT_OPTION" == "4" ]; then
+            echo "========================================================="
+            echo "📋 当前系统已挂载的证书路径一览："
+            echo "========================================================="
+            if [ -d "/etc/nginx/ssl" ]; then
+                ls -R /etc/nginx/ssl/
+            else
+                echo "未发现配置目录 /etc/nginx/ssl/"
+            fi
+            echo "========================================================="
+            read -p "按回车键继续..." temp
+
+        elif [ "$CERT_OPTION" == "5" ]; then
+            echo "正在临时释放 80 端口..."
+            sudo systemctl stop nginx 2>/dev/null || true
+            echo "80 端口服务已暂停。"
+            sleep 2
+
+        elif [ "$CERT_OPTION" == "6" ]; then
+            echo "正在恢复 80 端口服务..."
+            sudo systemctl start nginx 2>/dev/null || true
+            echo "80 端口服务已重新启动。"
+            sleep 2
+
+        elif [ "$CERT_OPTION" == "00" ]; then
+            echo "👋 退出整个脚本。"
+            exit 0
+        elif [ "$CERT_OPTION" == "0" ]; then
+            break
+        fi
+    done
+}
+
+# 6. 专属子函数：Nginx 管理二级菜单
+menu_nginx_management() {
+    while true; do
+        NGINX_STATUS="【未安装】"
+        if command -v nginx &> /dev/null; then
+            if systemctl is-active --quiet nginx; then
+                NGINX_STATUS="【🟢 正在运行】"
+            else
+                NGINX_STATUS="【🔴 已停止】"
+            fi
+        fi
+
+        clear
+        echo "========================================================="
+        echo "             🌐 Nginx 专属管理模块"
+        echo "========================================================="
+        echo "当前 Nginx 状态: $NGINX_STATUS"
+        echo "========================================================="
+        echo "1) 安装 Nginx"
+        echo "2) 卸载 Nginx"
+        echo "3) 配置反向代理"
+        echo "00) 退出脚本"
+        echo "0) 返回上一层"
+        echo "========================================================="
+        read -p "请选择操作 [0-3, 00]: " NG_OPTION
+
+        if [ "$NG_OPTION" == "1" ]; then
+            echo "📦 正在安装系统原生 Nginx..."
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update && sudo apt-get install -y nginx
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y epel-release && sudo yum install -y nginx
+            fi
+            sudo systemctl enable nginx 2>/dev/null || true
+            sudo systemctl start nginx 2>/dev/null || true
+            echo "✅ 安装程序执行完毕。"
+            sleep 2
+
+        elif [ "$NG_OPTION" == "2" ]; then
+            echo "🚨 正在彻底清洗并卸载 Nginx..."
+            sudo systemctl stop nginx 2>/dev/null || true
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get purge -y nginx nginx-common nginx-core
+                sudo apt-get autoremove -y
+            elif command -v yum &> /dev/null; then
+                sudo yum remove -y nginx
+            fi
+            sudo rm -rf /etc/nginx /var/log/nginx
+            echo "✅ 卸载干净。"
+            sleep 2
+
+        elif [ "$NG_OPTION" == "3" ]; then
+            if [ ! -d "/etc/nginx" ]; then
+                echo "❌ 未检测到 Nginx 配置目录，请先执行安装！"
+                sleep 2
+                continue
+            fi
+            read -p "请输入您要绑定反代的主域名 (例如 arm.971211.xyz): " NG_DOMAIN
+            read -p "请输入本地被转发的目标端口 (例如 28075): " NG_PORT
+            
+            if [ -z "$NG_DOMAIN" ] || [ -z "$NG_PORT" ]; then
+                echo "❌ 输入不可为空！"
+                sleep 2
+                continue
+            fi
+
+            # 自动化写入极简纯 HTTP 反代配置，支持主域与子域
+            sudo mkdir -p /etc/nginx/conf.d
+            echo "server {
+    listen 80;
+    listen [::]:80;
+    server_name $NG_DOMAIN;
+
+    location / {
+        proxy_pass http://127.0.0.1:$NG_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}" | sudo tee /etc/nginx/conf.d/${NG_DOMAIN}.conf > /dev/null
+
+            echo "⏳ 正在校准并测试 Nginx 新配置文件..."
+            if sudo nginx -t; then
+                sudo systemctl reload nginx
+                echo "🎉 反向代理配置成功！域名 $NG_DOMAIN 已成功转发到本地 $NG_PORT 端口。"
+            else
+                echo "❌ 配置文件存在语法错误，已自动撤销！"
+                sudo rm -f /etc/nginx/conf.d/${NG_DOMAIN}.conf
+            fi
+            read -p "按回车键继续..." temp
+
+        elif [ "$NG_OPTION" == "00" ]; then
+            exit 0
+        elif [ "$NG_OPTION" == "0" ]; then
+            break
+        fi
+    done
+}
+
+# 7. 全局主循环菜单
+while true; do
     clear
     echo "========================================================="
-    echo "             🔑 请选择证书申请验证模式"
+    echo "             ⚡ cj 全能系统管理与证书脚本 ⚡"
     echo "========================================================="
-    echo "1) 80 端口模式 ⭐(推荐)"
-    echo "2) Cloudflare 模式 (使用 DNS API)"
+    echo "1) 查询系统信息"
+    echo "2) 更新最新脚本"
+    echo "3) Nginx 管理模块"
+    echo "4) 申请证书与维护"
+    echo "5) BBR3 安装 (占位)"
+    echo "6) 网络优化 (占位)"
+    echo "7) 一键 SB (占位)"
+    echo "8) Docker 管理 (占位)"
+    echo "9) Komari 探针 (占位)"
+    echo "98) 注册快捷命令 cj"
+    echo "99) 卸载此脚本"
+    echo "0) 退出脚本"
     echo "========================================================="
-    read -p "请选择验证模式 [1-2]: " MODE_OPTION
+    read -p "请输入主菜单选项 [0-9, 98, 99]: " MAIN_OPTION
 
-    echo ""
-    echo "💡 【域名输入指引说明】"
-    echo "   - 如果只需要申请【单个域名】，直接输入即可（例：arm.971211.xyz）"
-    echo "   - 如果需要同时申请【多个域名】或【包含泛域名】，请务必使用【英文逗号】隔开"
-    echo "   - 规范示例：arm.971211.xyz,*.arm.971211.xyz"
-    echo "   - 注意：不要带有空格，确保前后域名格式正确"
-    echo ""
-    read -p "请输入您的域名组合: " DOMAINS
-    
-    if [ -z "$DOMAINS" ]; then
-        echo "❌ 域名不能为空，退出执行。"
-        exit 1
-    fi
-
-    # 将逗号分隔的域名解析，提取第一个为主域名
-    MAIN_DOMAIN=$(echo "$DOMAINS" | cut -d',' -f1)
-    
-    # 构造 acme.sh 域名多参数
-    DOMAIN_PARAMS=""
-    IFS=',' read -ra ADDR <<< "$DOMAINS"
-    for i in "${ADDR[@]}"; do
-        DOMAIN_PARAMS="$DOMAIN_PARAMS -d $i"
-    done
-
-    # ❗【找回被丢掉的路径选择逻辑】让用户决定证书拷贝到哪里
-    echo ""
-    echo "========================================================="
-    echo "             📂 请选择证书分发目标路径"
-    echo "========================================================="
-    echo "1) 默认当前用户家目录 (~/.acme.sh/${MAIN_DOMAIN}_ecc/)"
-    echo "2) 原生 Nginx 规范证书目录 (/etc/nginx/ssl/${MAIN_DOMAIN}/)"
-    echo "3) 自定义输入任意绝对路径"
-    echo "========================================================="
-    read -p "请选择路径模式 [1-3]: " PATH_OPTION
-
-    if [ "$PATH_OPTION" == "1" ]; then
-        TARGET_DIR="$HOME/.acme.sh/${MAIN_DOMAIN}_ecc"
-    elif [ "$PATH_OPTION" == "2" ]; then
-        TARGET_DIR="/etc/nginx/ssl/${MAIN_DOMAIN}"
-    elif [ "$PATH_OPTION" == "3" ]; then
-        read -p "请输入自定义绝对路径 (例如 /app/ssl/): " TARGET_DIR
-    else
-        TARGET_DIR="/etc/nginx/ssl/${MAIN_DOMAIN}" # 缺省默认
-    fi
-
-    if [ "$MODE_OPTION" == "1" ]; then
-        echo "▶️ 正在通过 80 端口模式申请证书: $DOMAINS"
-        # 自动释放 80 端口防止冲突
-        sudo systemctl stop nginx 2>/dev/null || true
-        
-        # 执行独立模式签发
-        "$HOME/.acme.sh/acme.sh" --issue --standalone $DOMAIN_PARAMS --server letsencrypt
-        
-        # 恢复 80 端口
-        sudo systemctl start nginx 2>/dev/null || true
-    else
-        echo "▶️ 正在通过 Cloudflare DNS API 模式申请证书: $DOMAINS"
-        read -p "请输入您的 Cloudflare API Token: " CF_TOKEN
-        if [ -z "$CF_TOKEN" ]; then
-            echo "❌ Token 不能为空！"
-            exit 1
-        fi
-        export CF_Token="$CF_TOKEN"
-        
-        # 执行 DNS 模式签发
-        "$HOME/.acme.sh/acme.sh" --issue --dns dns_cf $DOMAIN_PARAMS --server letsencrypt
-    fi
-
-    # 根据用户的选择路径，规范化拷贝证书
-    if [ -f "$HOME/.acme.sh/${MAIN_DOMAIN}_ecc/${MAIN_DOMAIN}.key" ]; then
-        echo "🎉 证书签发/验证完成！正在分发到目标目录..."
-        sudo mkdir -p "$TARGET_DIR"
-        "$HOME/.acme.sh/acme.sh" --install-cert $DOMAIN_PARAMS \
-            --key-file "${TARGET_DIR}/${MAIN_DOMAIN}.key" \
-            --fullchain-file "${TARGET_DIR}/${MAIN_DOMAIN}.crt"
-        echo "✅ 证书已成功同步至: ${TARGET_DIR}/"
-        
-        # 如果是分发到 nginx 目录，顺便执行热重载
-        if [[ "$TARGET_DIR" == *nginx* ]]; then
-            sudo nginx -t && sudo systemctl reload nginx 2>/dev/null || true
-        fi
-    else
-        echo "❌ 证书签发存在异常，请查看上方 acme.sh 的日志报错。"
-    fi
-
-elif [ "$OPTION" == "2" ]; then
-    perform_update
-
-elif [ "$OPTION" == "3" ]; then
-    echo "正在强制触发证书自动续签与维护..."
-    "$HOME/.acme.sh/acme.sh" --cron --home "$HOME/.acme.sh"
-    sudo nginx -t && sudo systemctl reload nginx 2>/dev/null || true
-
-elif [ "$OPTION" == "4" ]; then
-    echo "========================================================="
-    echo "📋 当前系统已挂载的有效规范化证书路径一览："
-    echo "========================================================="
-    if [ -d "/etc/nginx/ssl" ]; then
-        ls -R /etc/nginx/ssl/
-    else
-        echo "未发现配置目录 /etc/nginx/ssl/"
-    fi
-    echo "========================================================="
-
-elif [ "$OPTION" == "5" ]; then
-    echo "正在临时释放 80 端口..."
-    sudo systemctl stop nginx 2>/dev/null || true
-    echo "80 端口服务已暂停。"
-
-elif [ "$OPTION" == "6" ]; then
-    echo "正在恢复 80 端口服务..."
-    sudo systemctl start nginx 2>/dev/null || true
-    echo "80 端口服务已重新启动。"
-
-elif [ "$OPTION" == "7" ]; then
-    echo "正在配置系统全局快捷命令及自动化挂载..."
-    sudo cp "$0" "$LOCAL_SCRIPT_PATH"
-    sudo chmod +x "$LOCAL_SCRIPT_PATH"
-    
-    # 挂载每日凌晨 3 点静默自动检测续签的定时任务
-    (crontab -l 2>/dev/null | grep -v "cj --no-update"; echo "0 3 * * * $LOCAL_SCRIPT_PATH --no-update > /dev/null 2>&1") | crontab -
-    echo "✅ 快捷命令 [cj] 注册成功！以后直接输入 cj 即可运行，输入 2 即可一键在线更新。"
-
-elif [ "$OPTION" == "8" ]; then
-    perform_uninstall
-
-elif [ "$OPTION" == "0" ]; then
-    echo "👋 感谢使用，退出脚本。"
-    exit 0
-else
-    echo "❌ 选项无效，退出脚本。"
-    exit 1
-fi
+    case $MAIN_OPTION in
+        1)
+            clear
+            echo "========================================================="
+            echo "📋 基础系统现状大盘查"
+            echo "========================================================="
+            echo "内核版本: $(uname -r)"
+            echo "系统架构: $(uname -m)"
+            echo "运行时间: $(uptime -p)"
+            echo "当前时间: $(date)"
+            echo "========================================================="
+            read -p "按回车键返回主菜单..." temp
+            ;;
+        2)
+            perform_update
+            ;;
+        3)
+            menu_nginx_management
+            ;;
+        4)
+            menu_certificate_management
+            ;;
+        5|6|7|8|9)
+            echo "🚧 该模块正在快马加鞭开发中，目前仅作为功能占位！"
+            sleep 2
+            ;;
+        98)
+            echo "正在配置系统全局快捷命令及自动化挂载..."
+            sudo cp "$0" "$LOCAL_SCRIPT_PATH"
+            sudo chmod +x "$LOCAL_SCRIPT_PATH"
+            (crontab -l 2>/dev/null | grep -v "cj --no-update"; echo "0 3 * * * $LOCAL_SCRIPT_PATH --no-update > /dev/null 2>&1") | crontab -
+            echo "✅ 快捷命令 [cj] 注册成功！可在任意目录输入 cj 唤起主菜单。"
+            sleep 2
+            ;;
+        99)
+            perform_uninstall
+            ;;
+        0)
+            echo "👋 感谢使用，退出脚本。"
+            exit 0
+            ;;
+        *)
+            echo "❌ 无效输入，请重新选择！"
+            sleep 1
+            ;;
+    esac
+done
