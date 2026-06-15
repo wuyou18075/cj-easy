@@ -121,15 +121,10 @@ while true; do
         read -p "👉 请输入您的域名 (多个用逗号隔开，如 arm.971211.xyz,*.arm.971211.xyz): " RAW_INPUT_DOMAINS
         if [ "$RAW_INPUT_DOMAINS" = "0" ] || [ -z "$RAW_INPUT_DOMAINS" ]; then continue; fi
 
-        # 核心多域名解析算法：
-        # 1. 将输入的逗号替换成空格，方便循环遍历
         SPACE_DOMAINS=$(echo "$RAW_INPUT_DOMAINS" | tr ',' ' ')
-        
-        # 2. 提取出第一个域名，用于做文件夹和证书的命名基准 (去掉星号和_ecc防止路径非法)
         FIRST_DOMAIN=$(echo $SPACE_DOMAINS | awk '{print $1}')
         MAIN_NAMING_DOMAIN=$(echo "$FIRST_DOMAIN" | sed 's/\*//g' | sed 's/^\.//g' | sed 's/_ecc//g')
 
-        # 3. 拼接出符合 acme.sh 官方规范的多个 -d 参数命令字符串
         ACME_D_PARAMS=""
         for dm in $SPACE_DOMAINS; do
             ACME_D_PARAMS="$ACME_D_PARAMS -d $dm"
@@ -166,12 +161,13 @@ while true; do
 
         echo "---------------------------------------------------------"
         echo "请选择证书及私钥的导出路径："
-        echo "1) 官方通用标准路径 (直接回车默认 /etc/ssl/certs/主域名/)"
-        echo "2) 当前路径下的 certs 文件夹 (./certs/)"
-        echo "3) 完全自定义指定的路径"
+        echo "1) 官方通用标准路径 (默认 /etc/ssl/certs/主域名/)"
+        echo -e "2) ${GREEN}原生 Nginx 默认证书目录 (/etc/nginx/ssl/主域名/)${RESET}"
+        echo "3) 当前路径下的 certs 文件夹 (./certs/)"
+        echo "4) 完全自定义指定的路径"
         echo "0) 返回上一层"
         echo "---------------------------------------------------------"
-        read -p "请输入路径选项 [1-3, 或0返回, 默认1]: " PATH_CHOICE
+        read -p "请输入路径选项 [1-4, 或0返回, 默认1]: " PATH_CHOICE
         [ -z "$PATH_CHOICE" ] && PATH_CHOICE="1"
 
         if [ "$PATH_CHOICE" = "0" ]; then continue; fi
@@ -180,8 +176,10 @@ while true; do
         if [ "$PATH_CHOICE" = "1" ]; then
             CERT_DIR="/etc/ssl/certs/$MAIN_NAMING_DOMAIN"
         elif [ "$PATH_CHOICE" = "2" ]; then
-            CERT_DIR="$CURRENT_DIR/certs"
+            CERT_DIR="/etc/nginx/ssl/$MAIN_NAMING_DOMAIN"
         elif [ "$PATH_CHOICE" = "3" ]; then
+            CERT_DIR="$CURRENT_DIR/certs"
+        elif [ "$PATH_CHOICE" = "4" ]; then
             read -p "请输入自定义绝对路径 (输入 0 返回): " CUSTOM_PATH
             if [ "$CUSTOM_PATH" = "0" ] || [ -z "$CUSTOM_PATH" ]; then continue; fi
             CERT_DIR="$CUSTOM_PATH"
@@ -189,7 +187,7 @@ while true; do
             echo "无效选项！"; sleep 2; continue
         fi
 
-        mkdir -p "$CERT_DIR"
+        sudo mkdir -p "$CERT_DIR"
         REAL_CERT_DIR=$(cd "$CERT_DIR" && pwd)
 
         if [ -f /etc/debian_version ]; then
@@ -310,7 +308,7 @@ while true; do
         done
         read -p "强制续签任务结束，按回车键返回主菜单..."
 
-    # ----------------- 选项 4：查看证书文件路径 -----------------
+    # ----------------- 选项 4：查看证书 file 路径 -----------------
     elif [ "$MODE_CHOICE" = "4" ]; then
         if [ ! -d "$HOME/.acme.sh" ]; then echo "⚠️ 系统内无任何证书记录。"; sleep 2; continue; fi
         echo "========================================================="
