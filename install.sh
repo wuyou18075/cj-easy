@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-#             ⚡ cj 全能系统管理与证书脚本 (高智控反代版) ⚡
+#             ⚡ cj 全能系统管理与证书脚本 (完整合拢版) ⚡
 # =========================================================
 
 # 1. 脚本全局常量定义
@@ -200,13 +200,13 @@ menu_certificate_management() {
     done
 }
 
-# 6. 专属子函数：Nginx 管理二级菜单（全新重组优化）
+# 6. 专属子函数：Nginx 管理二级菜单
 menu_nginx_management() {
     while true; do
         NGINX_STATUS="\e[31m已停止\e[0m"
         if command -v nginx &> /dev/null; then
             if systemctl is-active --quiet nginx; then
-                NGINX_STATUS="\e[32m运行\e[0m" # 转换为标准 Linux 终端 ANSI 纯正绿色字体
+                NGINX_STATUS="\e[32m运行\e[0m"
             fi
         else
             NGINX_STATUS="\e[33m未安装\e[0m"
@@ -219,11 +219,12 @@ menu_nginx_management() {
         echo "1) 安装 Nginx"
         echo "2) 卸载 Nginx"
         echo "3) 高性能优化"
-        echo "4) 配置反向代理"
+        echo "4) 查看 nginx 配置文件"
+        echo "5) 配置反向代理"
         echo "0) 返回上一层"
         echo "00) 退出脚本"
         echo "========================================================="
-        read -p "请选择操作 [0-4, 00]: " NG_OPTION
+        read -p "请选择操作 [0-5, 00]: " NG_OPTION
 
         if [ "$NG_OPTION" == "1" ]; then
             echo "📦 正在安装系统原生 Nginx..."
@@ -255,17 +256,35 @@ menu_nginx_management() {
             sleep 2
 
         elif [ "$NG_OPTION" == "4" ]; then
+            # 自动化校验并无感安装 vim 依赖
+            if ! command -v vim &> /dev/null; then
+                echo "📦 检测到当前系统缺少 vim 编辑器，正在自动安装..."
+                if command -v apt-get &> /dev/null; then
+                    sudo apt-get update && sudo apt-get install -y vim
+                elif command -v yum &> /dev/null; then
+                    sudo yum install -y vim
+                fi
+            fi
+
+            # 核心查看文件推导
+            if [ -f "/etc/nginx/nginx.conf" ]; then
+                echo "🚀 正在调起 vim 查看主配置文件..."
+                vim /etc/nginx/nginx.conf
+            else
+                echo "❌ 错误：未在系统内发现 /etc/nginx/nginx.conf，请确认已安装 Nginx！"
+                sleep 2
+            fi
+
+        elif [ "$NG_OPTION" == "5" ]; then
             if [ ! -d "/etc/nginx" ]; then
                 echo "❌ 未检测到 Nginx 配置目录，请先执行安装！"
                 sleep 2
                 continue
             fi
 
-            # 智能提取有效证书主域名
             echo "🔍 正在扫描系统内有效的已签发域名..."
             VALID_DOMAINS=()
             if [ -d "/etc/nginx/ssl" ]; then
-                # 读取 ssl 目录下的子目录名作为有效域名
                 for dir in /etc/nginx/ssl/*; do
                     if [ -d "$dir" ]; then
                         VALID_DOMAINS+=($(basename "$dir"))
@@ -273,7 +292,6 @@ menu_nginx_management() {
                 done
             fi
 
-            # 判断系统内是否存在有效域名
             if [ ${#VALID_DOMAINS[@]} -eq 0 ]; then
                 echo "⚠️ 系统内未在 /etc/nginx/ssl/ 下检测到有效证书目录！"
                 read -p "请输入您要手动输入绑定的根域名 (例如 av.com): " ROOT_DOMAIN
@@ -287,7 +305,6 @@ menu_nginx_management() {
                 echo "========================================================="
                 read -p "请输入域名对应的序号: " DOMAIN_INDEX
                 
-                # 校验输入的有效性
                 if [[ "$DOMAIN_INDEX" =~ ^[0-9]+$ ]] && [ "$DOMAIN_INDEX" -le "${#VALID_DOMAINS[@]}" ] && [ "$DOMAIN_INDEX" -gt 0 ]; then
                     ROOT_DOMAIN="${VALID_DOMAINS[$((DOMAIN_INDEX-1))]}"
                 else
@@ -297,7 +314,6 @@ menu_nginx_management() {
                 fi
             fi
 
-            # 输入子域前缀与转发端口
             read -p "请输入您要绑定的前缀 (例如 vps): " SUB_PREFIX
             read -p "请输入本地被转发的目标端口 (例如 9900): " NG_PORT
             
@@ -307,14 +323,10 @@ menu_nginx_management() {
                 continue
             fi
 
-            # 智能无缝拼接完整目标子域名
             NG_DOMAIN="${SUB_PREFIX}.${ROOT_DOMAIN}"
-
-            # 自动化映射匹配的 SSL 证书及密匙存放路径
             SSL_CERT_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.crt"
             SSL_KEY_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.key"
 
-            # 强合拢全码高阶写入逻辑
             sudo mkdir -p /etc/nginx/conf.d
             echo "server {
     listen 80;
@@ -330,7 +342,7 @@ server {
     listen [::]:443 ssl;
     server_name $NG_DOMAIN;
 
-    # 挂载你的 SSL 证书路径 (根据主域名自动匹配已存在的根泛域名证书)
+    # 挂载你的 SSL 证书路径
     ssl_certificate $SSL_CERT_PATH;
     ssl_certificate_key $SSL_KEY_PATH;
 
@@ -339,7 +351,6 @@ server {
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 
-    # 真正的业务数据转发只在 443 内部安全进行
     location / {
         proxy_pass http://127.0.0.1:$NG_PORT;
         proxy_set_header Host \$host;
@@ -368,7 +379,7 @@ server {
     done
 }
 
-# 7. 全局主循环菜单 (完全适配你的 1-99 顶级布局)
+# 7. 全局主循环菜单 
 while true; do
     clear
     echo "========================================================="
