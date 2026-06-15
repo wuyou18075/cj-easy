@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-#             ⚡ cj 全能系统管理与证书脚本 ⚡
+#             ⚡ cj 全能系统管理与证书脚本 (高智控反代版) ⚡
 # =========================================================
 
 # 1. 脚本全局常量定义
@@ -51,7 +51,7 @@ check_acme_env() {
         sudo systemctl start cron 2>/dev/null || sudo systemctl start crond 2>/dev/null
     fi
     if [ ! -f "$HOME/.acme.sh/acme.sh" ]; then
-        curl https://get.acme.sh | sh -s email=my@971211.xyz
+        curl https://get.acme.sh | sh -s email=my@av.com
         source "$HOME/.acme.sh/acme.sh.env" 2>/dev/null
     fi
 }
@@ -95,9 +95,9 @@ menu_certificate_management() {
 
             echo ""
             echo "💡 【域名输入指引说明】"
-            echo "   - 如果只需要申请【单个域名】，直接输入即可（例：arm.971211.xyz）"
+            echo "   - 如果只需要申请【单个域名】，直接输入即可（例：arm.av.com）"
             echo "   - 如果需要同时申请【多个域名】或【包含泛域名】，请务必使用【英文逗号】隔开"
-            echo "   - 规范示例：arm.971211.xyz,*.arm.971211.xyz"
+            echo "   - 规范示例：arm.av.com,*.arm.av.com"
             echo ""
             read -p "请输入您的域名组合: " DOMAINS
             
@@ -200,31 +200,30 @@ menu_certificate_management() {
     done
 }
 
-# 6. 专属子函数：Nginx 管理二级菜单
+# 6. 专属子函数：Nginx 管理二级菜单（全新重组优化）
 menu_nginx_management() {
     while true; do
-        NGINX_STATUS="【未安装】"
+        NGINX_STATUS="\e[31m已停止\e[0m"
         if command -v nginx &> /dev/null; then
             if systemctl is-active --quiet nginx; then
-                NGINX_STATUS="【🟢 正在运行】"
-            else
-                NGINX_STATUS="【🔴 已停止】"
+                NGINX_STATUS="\e[32m运行\e[0m" # 转换为标准 Linux 终端 ANSI 纯正绿色字体
             fi
+        else
+            NGINX_STATUS="\e[33m未安装\e[0m"
         fi
 
         clear
         echo "========================================================="
-        echo "             🌐 Nginx 专属管理模块"
-        echo "========================================================="
-        echo "当前 Nginx 状态: $NGINX_STATUS"
+        echo -e " nginx 状态: $NGINX_STATUS"
         echo "========================================================="
         echo "1) 安装 Nginx"
         echo "2) 卸载 Nginx"
-        echo "3) 配置反向代理"
-        echo "00) 退出脚本"
+        echo "3) 高性能优化"
+        echo "4) 配置反向代理"
         echo "0) 返回上一层"
+        echo "00) 退出脚本"
         echo "========================================================="
-        read -p "请选择操作 [0-3, 00]: " NG_OPTION
+        read -p "请选择操作 [0-4, 00]: " NG_OPTION
 
         if [ "$NG_OPTION" == "1" ]; then
             echo "📦 正在安装系统原生 Nginx..."
@@ -252,27 +251,95 @@ menu_nginx_management() {
             sleep 2
 
         elif [ "$NG_OPTION" == "3" ]; then
+            echo "🚧 高性能优化模块正在快马加鞭开发中，目前仅作为功能占位！"
+            sleep 2
+
+        elif [ "$NG_OPTION" == "4" ]; then
             if [ ! -d "/etc/nginx" ]; then
                 echo "❌ 未检测到 Nginx 配置目录，请先执行安装！"
                 sleep 2
                 continue
             fi
-            read -p "请输入您要绑定反代的主域名 (例如 arm.971211.xyz): " NG_DOMAIN
-            read -p "请输入本地被转发的目标端口 (例如 28075): " NG_PORT
+
+            # 智能提取有效证书主域名
+            echo "🔍 正在扫描系统内有效的已签发域名..."
+            VALID_DOMAINS=()
+            if [ -d "/etc/nginx/ssl" ]; then
+                # 读取 ssl 目录下的子目录名作为有效域名
+                for dir in /etc/nginx/ssl/*; do
+                    if [ -d "$dir" ]; then
+                        VALID_DOMAINS+=($(basename "$dir"))
+                    fi
+                done
+            fi
+
+            # 判断系统内是否存在有效域名
+            if [ ${#VALID_DOMAINS[@]} -eq 0 ]; then
+                echo "⚠️ 系统内未在 /etc/nginx/ssl/ 下检测到有效证书目录！"
+                read -p "请输入您要手动输入绑定的根域名 (例如 av.com): " ROOT_DOMAIN
+            else
+                echo "========================================================="
+                echo "📋 请选择当前电脑中有效域名的序号："
+                echo "========================================================="
+                for i in "${!VALID_DOMAINS[@]}"; do
+                    echo "$((i+1))) ${VALID_DOMAINS[$i]}"
+                done
+                echo "========================================================="
+                read -p "请输入域名对应的序号: " DOMAIN_INDEX
+                
+                # 校验输入的有效性
+                if [[ "$DOMAIN_INDEX" =~ ^[0-9]+$ ]] && [ "$DOMAIN_INDEX" -le "${#VALID_DOMAINS[@]}" ] && [ "$DOMAIN_INDEX" -gt 0 ]; then
+                    ROOT_DOMAIN="${VALID_DOMAINS[$((DOMAIN_INDEX-1))]}"
+                else
+                    echo "❌ 序号选择错误，回到上级菜单！"
+                    sleep 2
+                    continue
+                fi
+            fi
+
+            # 输入子域前缀与转发端口
+            read -p "请输入您要绑定的前缀 (例如 vps): " SUB_PREFIX
+            read -p "请输入本地被转发的目标端口 (例如 9900): " NG_PORT
             
-            if [ -z "$NG_DOMAIN" ] || [ -z "$NG_PORT" ]; then
-                echo "❌ 输入不可为空！"
+            if [ -z "$SUB_PREFIX" ] || [ -z "$NG_PORT" ]; then
+                echo "❌ 前缀或端口输入不可为空！"
                 sleep 2
                 continue
             fi
 
-            # 自动化写入极简纯 HTTP 反代配置，支持主域与子域
+            # 智能无缝拼接完整目标子域名
+            NG_DOMAIN="${SUB_PREFIX}.${ROOT_DOMAIN}"
+
+            # 自动化映射匹配的 SSL 证书及密匙存放路径
+            SSL_CERT_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.crt"
+            SSL_KEY_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.key"
+
+            # 强合拢全码高阶写入逻辑
             sudo mkdir -p /etc/nginx/conf.d
             echo "server {
     listen 80;
     listen [::]:80;
     server_name $NG_DOMAIN;
+    
+    # 核心修改：只要敢用 80 端口进来，立刻无条件断开并强制定向到 443 HTTPS
+    return 301 https://\$host\$request_uri;
+}
 
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name $NG_DOMAIN;
+
+    # 挂载你的 SSL 证书路径 (根据主域名自动匹配已存在的根泛域名证书)
+    ssl_certificate $SSL_CERT_PATH;
+    ssl_certificate_key $SSL_KEY_PATH;
+
+    # SSL 安全合规性参数优化
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    # 真正的业务数据转发只在 443 内部安全进行
     location / {
         proxy_pass http://127.0.0.1:$NG_PORT;
         proxy_set_header Host \$host;
@@ -282,12 +349,13 @@ menu_nginx_management() {
     }
 }" | sudo tee /etc/nginx/conf.d/${NG_DOMAIN}.conf > /dev/null
 
-            echo "⏳ 正在校准并测试 Nginx 新配置文件..."
+            echo "⏳ 正在校准并测试 Nginx 443 满血配置文件架构..."
             if sudo nginx -t; then
                 sudo systemctl reload nginx
-                echo "🎉 反向代理配置成功！域名 $NG_DOMAIN 已成功转发到本地 $NG_PORT 端口。"
+                echo "🎉 【配置成功】反向代理与 443 加密全码通道一键合并生效！"
+                echo "🚀 完整子域名：$NG_DOMAIN 已完美转发至本地 $NG_PORT 端口。"
             else
-                echo "❌ 配置文件存在语法错误，已自动撤销！"
+                echo "❌ 配置文件存在语法错误，已自动清空撤销异常代理！"
                 sudo rm -f /etc/nginx/conf.d/${NG_DOMAIN}.conf
             fi
             read -p "按回车键继续..." temp
@@ -300,7 +368,7 @@ menu_nginx_management() {
     done
 }
 
-# 7. 全局主循环菜单
+# 7. 全局主循环菜单 (完全适配你的 1-99 顶级布局)
 while true; do
     clear
     echo "========================================================="
@@ -316,7 +384,7 @@ while true; do
     echo "8) Docker 管理 (占位)"
     echo "9) Komari 探针 (占位)"
     echo "98) 注册快捷命令 cj"
-    echo "99) 卸载此脚本"
+    echo "99) 彻底卸载此脚本"
     echo "0) 退出脚本"
     echo "========================================================="
     read -p "请输入主菜单选项 [0-9, 98, 99]: " MAIN_OPTION
