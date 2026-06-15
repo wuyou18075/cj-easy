@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-#             ⚡ cj 全能系统管理与证书脚本 (无瑕合拢版) ⚡
+#             ⚡ cj 全能系统管理与证书脚本 (内网直连版) ⚡
 # =========================================================
 
 # 1. 脚本全局常量定义
@@ -296,11 +296,8 @@ menu_nginx_management() {
                 for conf_file in /etc/nginx/conf.d/*.conf; do
                     if [ -f "$conf_file" ]; then
                         HAS_CONF=1
-                        EXTRACT_PORT=$(grep -oP 'proxy_pass http://127.0.0.1:\K\d+' "$conf_file" | head -n 1)
+                        EXTRACT_PORT=$(grep -oP 'proxy_pass http://(?:127\.0\.0\.1|localhost|[\d\.]+):\K\d+' "$conf_file" | head -n 1)
                         EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
-                        if [ -z "$EXTRACT_PORT" ]; then
-                            EXTRACT_PORT=$(grep -oP 'proxy_pass http://localhost:\K\d+' "$conf_file" | head -n 1)
-                        fi
                         if [ -n "$EXTRACT_PORT" ] && [ -n "$EXTRACT_DOMAIN" ]; then
                             echo " 📍 localhost:${EXTRACT_PORT}  ──►  ${EXTRACT_DOMAIN}"
                         else
@@ -362,7 +359,13 @@ menu_nginx_management() {
             SSL_CERT_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.crt"
             SSL_KEY_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.key"
 
-            # 🛠️ 兼容性改造：如果之前反复配置过同名前缀，先对旧配置进行备份以便失败时安全回滚
+            # 🎯 核心改变：一步到位，直接获取系统网卡的内网私有 IP（排除 127.0.0.1 并且最稳定）
+            LOCAL_PRIVATE_IP=$(hostname -I | awk '{print $1}')
+            if [ -z "$LOCAL_PRIVATE_IP" ]; then
+                LOCAL_PRIVATE_IP="127.0.0.1" # 极端缺省防呆
+            fi
+
+            # 幂等备份处理
             if [ -f "$CONF_FILE_PATH" ]; then
                 sudo mv "$CONF_FILE_PATH" "$BACKUP_FILE_PATH"
             else
@@ -390,7 +393,8 @@ server {
     ssl_prefer_server_ciphers on;
 
     location / {
-        proxy_pass http://127.0.0.1:$NG_PORT;
+        # 🚀 一步到位：反代目标直接锁定内网私有 IP，完美跨越 Docker 回环网络栈壁垒！
+        proxy_pass http://$LOCAL_PRIVATE_IP:$NG_PORT;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -400,22 +404,20 @@ server {
 
             echo "⏳ 正在测试 Nginx 443 满血配置文件架构..."
             if sudo nginx -t &>/dev/null && sudo systemctl reload nginx &>/dev/null; then
-                # 🎯 重磅功能：高内聚反代联动存活深度探测
-                echo "🔍 正在对新域名反代通道进行联通性联调验证..."
+                echo "🔍 正在通过内网私有 IP [$LOCAL_PRIVATE_IP] 联调验证反代联通性..."
                 sleep 2
                 
-                # 模拟请求并捕获目标域名返回的 HTTP 状态码
+                # 联动验证
                 HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --resolve ${NG_DOMAIN}:443:127.0.0.1 -k "https://${NG_DOMAIN}/")
                 
                 if [ "$HTTP_CODE" == "502" ] || [ "$HTTP_CODE" == "000" ]; then
                     echo "========================================================="
-                    echo "🚨 【判定配置失败】检测到通过域名访问返回了 $HTTP_CODE (502错误或拦截)！"
-                    echo "💡 异常分析：可能是本地端口 $NG_PORT 的后端服务未正常启动，导致 Nginx 无法联通。"
+                    echo "🚨 【判定配置失败】检测到通过域名访问返回了 $HTTP_CODE！"
+                    echo "💡 异常分析：请确认容器或底层服务是否真的成功跑在 $NG_PORT 端口上。"
                     echo "🔄 正在自动启动【回滚逻辑】，撤销此次损坏的反代文件..."
                     echo "========================================================="
                     
                     sudo rm -f "$CONF_FILE_PATH"
-                    # 如果刚才有备份的旧配置，自动恢复回去
                     if [ -f "$BACKUP_FILE_PATH" ]; then
                         sudo mv "$BACKUP_FILE_PATH" "$CONF_FILE_PATH"
                     fi
@@ -424,8 +426,8 @@ server {
                 else
                     echo "========================================================="
                     echo "🎉 【配置成功且通过联动探测】"
-                    echo "🚀 完整子域名：$NG_DOMAIN  ──►  localhost:$NG_PORT"
-                    echo "📶 联调测试状态码：$HTTP_CODE (网络状态健康)"
+                    echo "🚀 完整子域名：$NG_DOMAIN  ──►  内网直连端口：$NG_PORT"
+                    echo "📶 联调测试状态码：$HTTP_CODE (网路健康状态优良)"
                     echo "========================================================="
                     sudo rm -f "$BACKUP_FILE_PATH"
                 fi
