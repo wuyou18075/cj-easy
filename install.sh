@@ -1,24 +1,32 @@
 #!/bin/bash
 
 # =========================================================
-#             ⚡ cj 全能系统管理与证书脚本 (完整合拢版) ⚡
+#             ⚡ cj 全能系统管理与证书脚本 (无瑕合拢版) ⚡
 # =========================================================
 
 # 1. 脚本全局常量定义
 ONLINE_SCRIPT_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/install.sh"
 LOCAL_SCRIPT_PATH="/usr/local/bin/cj"
 
-# 2. 核心功能：在线检查并更新本地脚本函数
+# 2. 核心功能：在线检查并更新本地脚本函数 (已加入明确的成功与失败提示)
 perform_update() {
     echo "🔄 正在检查在线版本并同步更新..."
     curl -s -m 5 "$ONLINE_SCRIPT_URL" > /tmp/cj_new.sh
     if [ -s /tmp/cj_new.sh ]; then
         sudo mv /tmp/cj_new.sh "$LOCAL_SCRIPT_PATH"
         sudo chmod +x "$LOCAL_SCRIPT_PATH"
-        echo "✅ 脚本已成功同步至最新版本！正在重新载入..."
+        echo "========================================================="
+        echo "🎉 【更新成功】快捷命令已同步至最新全码反代版！"
+        echo "========================================================="
+        echo "🔄 正在自动重新载入新脚本..."
+        sleep 2
         exec "$LOCAL_SCRIPT_PATH" --no-update
     else
-        echo "❌ 无法连接到 GitHub 更新源，更新失败，请检查网络。"
+        echo "========================================================="
+        echo "❌ 【更新失败】无法连接到 GitHub 更新源！"
+        echo "💡 提示：请确认您是否已将最新代码提交推送(Push)到 GitHub 仓库，或检查网络连接。"
+        echo "========================================================="
+        read -p "按回车键继续..." temp
     fi
 }
 
@@ -256,7 +264,6 @@ menu_nginx_management() {
             sleep 2
 
         elif [ "$NG_OPTION" == "4" ]; then
-            # 自动化校验并无感安装 vim 依赖
             if ! command -v vim &> /dev/null; then
                 echo "📦 检测到当前系统缺少 vim 编辑器，正在自动安装..."
                 if command -v apt-get &> /dev/null; then
@@ -265,8 +272,6 @@ menu_nginx_management() {
                     sudo yum install -y vim
                 fi
             fi
-
-            # 核心查看文件推导
             if [ -f "/etc/nginx/nginx.conf" ]; then
                 echo "🚀 正在调起 vim 查看主配置文件..."
                 vim /etc/nginx/nginx.conf
@@ -282,7 +287,35 @@ menu_nginx_management() {
                 continue
             fi
 
-            echo "🔍 正在扫描系统内有效的已签发域名..."
+            clear
+            echo "========================================================="
+            echo "📋 当前系统已挂载的有效反向代理列表一览："
+            echo "========================================================="
+            HAS_CONF=0
+            if [ -d "/etc/nginx/conf.d" ]; then
+                for conf_file in /etc/nginx/conf.d/*.conf; do
+                    if [ -f "$conf_file" ]; then
+                        HAS_CONF=1
+                        EXTRACT_PORT=$(grep -oP 'proxy_pass http://127.0.0.1:\K\d+' "$conf_file" | head -n 1)
+                        EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
+                        if [ -z "$EXTRACT_PORT" ]; then
+                            EXTRACT_PORT=$(grep -oP 'proxy_pass http://localhost:\K\d+' "$conf_file" | head -n 1)
+                        fi
+                        if [ -n "$EXTRACT_PORT" ] && [ -n "$EXTRACT_DOMAIN" ]; then
+                            echo " 📍 localhost:${EXTRACT_PORT}  ──►  ${EXTRACT_DOMAIN}"
+                        else
+                            echo " 📍 配置文件: $(basename "$conf_file") (自定义规则)"
+                        fi
+                    fi
+                done
+            fi
+            if [ $HAS_CONF -eq 0 ]; then
+                echo "   (暂无已配置的自定义虚拟域名代理文件)"
+            fi
+            echo "========================================================="
+            echo ""
+
+            echo "🔍 正在扫描系统内有效的已签发根域名证书..."
             VALID_DOMAINS=()
             if [ -d "/etc/nginx/ssl" ]; then
                 for dir in /etc/nginx/ssl/*; do
@@ -314,7 +347,7 @@ menu_nginx_management() {
                 fi
             fi
 
-            read -p "请输入您要绑定的前缀 (例如 vps): " SUB_PREFIX
+            read -p "请输入您要绑定的子域前缀 (例如 vps): " SUB_PREFIX
             read -p "请输入本地被转发的目标端口 (例如 9900): " NG_PORT
             
             if [ -z "$SUB_PREFIX" ] || [ -z "$NG_PORT" ]; then
