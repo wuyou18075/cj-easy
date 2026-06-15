@@ -8,7 +8,7 @@
 ONLINE_SCRIPT_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/install.sh"
 LOCAL_SCRIPT_PATH="/usr/local/bin/cj"
 
-# 2. 核心功能：在线检查并更新本地脚本函数 (已加入明确的成功与失败提示)
+# 2. 核心功能：在线检查并更新本地脚本函数
 perform_update() {
     echo "🔄 正在检查在线版本并同步更新..."
     curl -s -m 5 "$ONLINE_SCRIPT_URL" > /tmp/cj_new.sh
@@ -357,16 +357,23 @@ menu_nginx_management() {
             fi
 
             NG_DOMAIN="${SUB_PREFIX}.${ROOT_DOMAIN}"
+            CONF_FILE_PATH="/etc/nginx/conf.d/${NG_DOMAIN}.conf"
+            BACKUP_FILE_PATH="/tmp/${NG_DOMAIN}.conf.bak"
             SSL_CERT_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.crt"
             SSL_KEY_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.key"
+
+            # 🛠️ 兼容性改造：如果之前反复配置过同名前缀，先对旧配置进行备份以便失败时安全回滚
+            if [ -f "$CONF_FILE_PATH" ]; then
+                sudo mv "$CONF_FILE_PATH" "$BACKUP_FILE_PATH"
+            else
+                sudo rm -f "$BACKUP_FILE_PATH"
+            fi
 
             sudo mkdir -p /etc/nginx/conf.d
             echo "server {
     listen 80;
     listen [::]:80;
     server_name $NG_DOMAIN;
-    
-    # 核心修改：只要敢用 80 端口进来，立刻无条件断开并强制定向到 443 HTTPS
     return 301 https://\$host\$request_uri;
 }
 
@@ -375,11 +382,9 @@ server {
     listen [::]:443 ssl;
     server_name $NG_DOMAIN;
 
-    # 挂载你的 SSL 证书路径
     ssl_certificate $SSL_CERT_PATH;
     ssl_certificate_key $SSL_KEY_PATH;
 
-    # SSL 安全合规性参数优化
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
@@ -391,16 +396,46 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
-}" | sudo tee /etc/nginx/conf.d/${NG_DOMAIN}.conf > /dev/null
+}" | sudo tee "$CONF_FILE_PATH" > /dev/null
 
-            echo "⏳ 正在校准并测试 Nginx 443 满血配置文件架构..."
-            if sudo nginx -t; then
-                sudo systemctl reload nginx
-                echo "🎉 【配置成功】反向代理与 443 加密全码通道一键合并生效！"
-                echo "🚀 完整子域名：$NG_DOMAIN 已完美转发至本地 $NG_PORT 端口。"
+            echo "⏳ 正在测试 Nginx 443 满血配置文件架构..."
+            if sudo nginx -t &>/dev/null && sudo systemctl reload nginx &>/dev/null; then
+                # 🎯 重磅功能：高内聚反代联动存活深度探测
+                echo "🔍 正在对新域名反代通道进行联通性联调验证..."
+                sleep 2
+                
+                # 模拟请求并捕获目标域名返回的 HTTP 状态码
+                HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --resolve ${NG_DOMAIN}:443:127.0.0.1 -k "https://${NG_DOMAIN}/")
+                
+                if [ "$HTTP_CODE" == "502" ] || [ "$HTTP_CODE" == "000" ]; then
+                    echo "========================================================="
+                    echo "🚨 【判定配置失败】检测到通过域名访问返回了 $HTTP_CODE (502错误或拦截)！"
+                    echo "💡 异常分析：可能是本地端口 $NG_PORT 的后端服务未正常启动，导致 Nginx 无法联通。"
+                    echo "🔄 正在自动启动【回滚逻辑】，撤销此次损坏的反代文件..."
+                    echo "========================================================="
+                    
+                    sudo rm -f "$CONF_FILE_PATH"
+                    # 如果刚才有备份的旧配置，自动恢复回去
+                    if [ -f "$BACKUP_FILE_PATH" ]; then
+                        sudo mv "$BACKUP_FILE_PATH" "$CONF_FILE_PATH"
+                    fi
+                    sudo systemctl reload nginx
+                    echo "✅ 已成功回退到之前的配置状态，保护系统不受影响！"
+                else
+                    echo "========================================================="
+                    echo "🎉 【配置成功且通过联动探测】"
+                    echo "🚀 完整子域名：$NG_DOMAIN  ──►  localhost:$NG_PORT"
+                    echo "📶 联调测试状态码：$HTTP_CODE (网络状态健康)"
+                    echo "========================================================="
+                    sudo rm -f "$BACKUP_FILE_PATH"
+                fi
             else
-                echo "❌ 配置文件存在语法错误，已自动清空撤销异常代理！"
-                sudo rm -f /etc/nginx/conf.d/${NG_DOMAIN}.conf
+                echo "❌ Nginx 语法校验或重载失败！执行安全自动回滚..."
+                sudo rm -f "$CONF_FILE_PATH"
+                if [ -f "$BACKUP_FILE_PATH" ]; then
+                    sudo mv "$BACKUP_FILE_PATH" "$CONF_FILE_PATH"
+                fi
+                sudo systemctl reload nginx
             fi
             read -p "按回车键继续..." temp
 
