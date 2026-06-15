@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-#             ⚡ 域名证书全能管理脚本 (完整合并版) ⚡
+#             ⚡ 域名证书全能管理脚本 (完整交互版) ⚡
 # =========================================================
 
 # 1. 脚本全局常量定义
@@ -31,7 +31,7 @@ perform_update() {
         echo "✅ 脚本已成功同步至最新版本！正在重新载入..."
         exec "$LOCAL_SCRIPT_PATH" --no-update
     else
-        echo "❌ 无法连接到 GitHub 更新源，更新失败，请检查网络。"
+        echo "❌ 无法连接到 GitHub 更新源，更新失败，请检查 network。"
     fi
 }
 
@@ -126,6 +126,27 @@ if [ "$OPTION" == "1" ]; then
         DOMAIN_PARAMS="$DOMAIN_PARAMS -d $i"
     done
 
+    # ❗【找回被丢掉的路径选择逻辑】让用户决定证书拷贝到哪里
+    echo ""
+    echo "========================================================="
+    echo "             📂 请选择证书分发目标路径"
+    echo "========================================================="
+    echo "1) 默认当前用户家目录 (~/.acme.sh/${MAIN_DOMAIN}_ecc/)"
+    echo "2) 原生 Nginx 规范证书目录 (/etc/nginx/ssl/${MAIN_DOMAIN}/)"
+    echo "3) 自定义输入任意绝对路径"
+    echo "========================================================="
+    read -p "请选择路径模式 [1-3]: " PATH_OPTION
+
+    if [ "$PATH_OPTION" == "1" ]; then
+        TARGET_DIR="$HOME/.acme.sh/${MAIN_DOMAIN}_ecc"
+    elif [ "$PATH_OPTION" == "2" ]; then
+        TARGET_DIR="/etc/nginx/ssl/${MAIN_DOMAIN}"
+    elif [ "$PATH_OPTION" == "3" ]; then
+        read -p "请输入自定义绝对路径 (例如 /app/ssl/): " TARGET_DIR
+    else
+        TARGET_DIR="/etc/nginx/ssl/${MAIN_DOMAIN}" # 缺省默认
+    fi
+
     if [ "$MODE_OPTION" == "1" ]; then
         echo "▶️ 正在通过 80 端口模式申请证书: $DOMAINS"
         # 自动释放 80 端口防止冲突
@@ -149,15 +170,19 @@ if [ "$OPTION" == "1" ]; then
         "$HOME/.acme.sh/acme.sh" --issue --dns dns_cf $DOMAIN_PARAMS --server letsencrypt
     fi
 
-    # 规范化证书分发移动到 Nginx 标准目录
+    # 根据用户的选择路径，规范化拷贝证书
     if [ -f "$HOME/.acme.sh/${MAIN_DOMAIN}_ecc/${MAIN_DOMAIN}.key" ]; then
-        echo "🎉 证书签发成功！正在进行规范化目录分发..."
-        sudo mkdir -p "/etc/nginx/ssl/${MAIN_DOMAIN}"
+        echo "🎉 证书签发/验证完成！正在分发到目标目录..."
+        sudo mkdir -p "$TARGET_DIR"
         "$HOME/.acme.sh/acme.sh" --install-cert $DOMAIN_PARAMS \
-            --key-file "/etc/nginx/ssl/${MAIN_DOMAIN}/${MAIN_DOMAIN}.key" \
-            --fullchain-file "/etc/nginx/ssl/${MAIN_DOMAIN}/${MAIN_DOMAIN}.crt"
-        echo "✅ 证书已成功同步至: /etc/nginx/ssl/${MAIN_DOMAIN}/"
-        sudo nginx -t && sudo systemctl reload nginx 2>/dev/null || true
+            --key-file "${TARGET_DIR}/${MAIN_DOMAIN}.key" \
+            --fullchain-file "${TARGET_DIR}/${MAIN_DOMAIN}.crt"
+        echo "✅ 证书已成功同步至: ${TARGET_DIR}/"
+        
+        # 如果是分发到 nginx 目录，顺便执行热重载
+        if [[ "$TARGET_DIR" == *nginx* ]]; then
+            sudo nginx -t && sudo systemctl reload nginx 2>/dev/null || true
+        fi
     else
         echo "❌ 证书签发存在异常，请查看上方 acme.sh 的日志报错。"
     fi
