@@ -26,20 +26,28 @@ while true; do
     echo "             ⚡ 域名证书全能管理脚本 ⚡"
     echo "========================================================="
 
-    # 1. 检查 80 端口
+    # 1. 检查 80 端口 (多维精准检测版：支持原生进程 + Docker 容器)
     PORT_80_INFO=""
-    if command -v ss &> /dev/null; then
-        PORT_80_INFO=$(ss -tlpn | grep -E '(:80)\b' || true)
-    elif command -v netstat &> /dev/null; then
-        PORT_80_INFO=$(netstat -tlpn | grep -E '(:80)\b' || true)
-    else
-        PORT_80_INFO=$(lsof -i tcp:80 | grep LISTEN || true)
+    DOCKER_80_INFO=""
+    
+    if command -v docker &> /dev/null; then
+        DOCKER_80_INFO=$(sudo docker ps --filter "publish=80" --format "{{.Names}}" | head -n 1 || true)
     fi
 
-    if [ -z "$PORT_80_INFO" ]; then
-        echo -e "80 端口: ${GREEN}【空闲】${RESET}"
+    if command -v ss &> /dev/null; then
+        PORT_80_INFO=$(sudo ss -tlpn | grep -E '(:80)\b' || true)
+    elif command -v netstat &> /dev/null; then
+        PORT_80_INFO=$(sudo netstat -tlpn | grep -E '(:80)\b' || true)
     else
+        PORT_80_INFO=$(sudo lsof -i tcp:80 | grep LISTEN || true)
+    fi
+
+    if [ -n "$DOCKER_80_INFO" ]; then
+        echo -e "80 端口: ${RED}【已占用】(Docker容器: $DOCKER_80_INFO)${RESET}"
+    elif [ -n "$PORT_80_INFO" ]; then
         echo -e "80 端口: ${RED}【已占用】${RESET}"
+    else
+        echo -e "80 端口: ${GREEN}【空闲】${RESET}"
     fi
 
     # 2. 有有效证书简易看板
@@ -173,9 +181,9 @@ while true; do
         REAL_CERT_DIR=$(cd "$CERT_DIR" && pwd)
 
         if [ -f /etc/debian_version ]; then
-            apt-get update -y && apt-get install -y curl cron socat tar openssl
+            sudo apt-get update -y && sudo apt-get install -y curl cron socat tar openssl
         elif [ -f /etc/redhat-release ]; then
-            yum install -y curl crontabs socat tar openssl
+            sudo yum install -y curl crontabs socat tar openssl
         fi
 
         if [ ! -f "$ACME_BIN" ]; then
@@ -218,7 +226,7 @@ while true; do
         echo -e "=========================================================${RESET}"
         read -p "按回车键返回主菜单..."
 
-    # ----------------- 选项 3：续签与一键删除 -----------------
+    # ----------------- 选项 3：精细化续签与一键删除逻辑 -----------------
     elif [ "$MODE_CHOICE" = "3" ]; then
         if [ ! -f "$ACME_BIN" ] || [ ! -d "$HOME/.acme.sh" ]; then echo "⚠️ 未检测到任何证书记录。"; sleep 2; continue; fi
         
@@ -275,7 +283,7 @@ while true; do
             echo -e "${GREEN}✅ 无效域名证书一键清理完毕！${RESET}"; read -p "按回车键返回主菜单..." ; continue;
         fi
 
-        NGINX_DOCKER_RUNNING=$(docker ps --format '{{.Names}}' | grep "nginx" || true)
+        NGINX_DOCKER_RUNNING=$(sudo docker ps --format '{{.Names}}' | grep "nginx" || true)
         for CHOICE in $CHOICES; do
             INDEX=$((CHOICE-1))
             if [ $INDEX -lt 0 ] || [ $INDEX -ge ${#DOMAINS[@]} ]; then continue; fi
@@ -283,10 +291,10 @@ while true; do
             CLEAN_DOMAIN=$(echo "$TARGET_DOMAIN" | sed 's/_ecc//g')
             
             if grep -q "Le_Webroot='6'" "$HOME/.acme.sh/${TARGET_DOMAIN}/${TARGET_DOMAIN}.conf" 2>/dev/null; then
-                if [ -n "$NGINX_DOCKER_RUNNING" ]; then docker stop nginx-proxy || true; fi
+                if [ -n "$NGINX_DOCKER_RUNNING" ]; then sudo docker stop nginx-proxy || true; fi
             fi
             "$ACME_BIN" --renew -d "$CLEAN_DOMAIN" --force --ecc || "$ACME_BIN" --renew -d "$TARGET_DOMAIN" --force --ecc || true
-            if [ -n "$NGINX_DOCKER_RUNNING" ]; then docker start nginx-proxy || true; fi
+            if [ -n "$NGINX_DOCKER_RUNNING" ]; then sudo docker start nginx-proxy || true; fi
         done
         read -p "强制续签任务结束，按回车键返回主菜单..."
 
@@ -323,17 +331,17 @@ while true; do
 
     # ----------------- 选项 5：临时释放 80 端口 -----------------
     elif [ "$MODE_CHOICE" = "5" ]; then
-        if [ -z "$PORT_80_INFO" ]; then echo "🟢 80 端口本就处于空闲状态！"; sleep 2; continue; fi
+        if [ -z "$PORT_80_INFO" ] && [ -z "$DOCKER_80_INFO" ]; then echo "🟢 80 端口本就处于空闲状态！"; sleep 2; continue; fi
         rm -f "$BACKUP_FILE"
-        DOCKER_CONTAINER=$(docker ps --filter "publish=80" --format "{{.Names}}" | head -n 1 || true)
+        DOCKER_CONTAINER=$(sudo docker ps --filter "publish=80" --format "{{.Names}}" | head -n 1 || true)
         if [ -n "$DOCKER_CONTAINER" ]; then
             echo "docker:$DOCKER_CONTAINER" > "$BACKUP_FILE"
-            docker stop "$DOCKER_CONTAINER"
+            sudo docker stop "$DOCKER_CONTAINER"
             echo "✅ 容器 [$DOCKER_CONTAINER] 已成功停止！"
         else
             if echo "$PORT_80_INFO" | grep -qi "nginx"; then
                 echo "system:nginx" > "$BACKUP_FILE"
-                systemctl stop nginx || service nginx stop || killall nginx || true
+                sudo systemctl stop nginx || sudo service nginx stop || sudo killall nginx || true
                 echo "✅ 系统级 Nginx 已成功关闭！"
             else
                 echo "❌ 无法自动识别该进程，请手动执行 kill 杀死占用进程。"
@@ -347,10 +355,10 @@ while true; do
         SERVICE_TYPE=$(cut -d':' -f1 "$BACKUP_FILE")
         SERVICE_NAME=$(cut -d':' -f2 "$BACKUP_FILE")
         if [ "$SERVICE_TYPE" = "docker" ]; then
-            docker start "$SERVICE_NAME"
+            sudo docker start "$SERVICE_NAME"
             echo "🟢 [$SERVICE_NAME] 容器已恢复运行！"
         elif [ "$SERVICE_TYPE" = "system" ]; then
-            systemctl start nginx || service nginx start || true
+            sudo systemctl start nginx || sudo service nginx start || true
             echo "🟢 系统级 Nginx 服务已恢复运行！"
         fi
         rm -f "$BACKUP_FILE"
@@ -360,7 +368,6 @@ while true; do
     elif [ "$MODE_CHOICE" = "7" ]; then
         echo "正在检查快捷命令 [cj] 的可用性..."
         
-        # 冲突检测：如果 cj 已经是系统内置其他命令，进行提示
         if command -v cj &> /dev/null && [ ! -L /usr/local/bin/cj ]; then
             echo -e "${RED}❌ 注册失败：系统已存在名为 [cj] 的内置命令或软件，请换个名字。${RESET}"
             sleep 3
@@ -373,16 +380,12 @@ while true; do
             continue
         fi
 
-        # 判断当前脚本是本地文件还是通过网络直接运行的
-        if [ -f "$0" ] && [ -s "$0" ]; then
-            # 本地运行，直接建立软链接
+        if [ -f "$0" ] && [ -s "$0" ] && [ "$0" != "/dev/fd/63" ]; then
             ln -sf "$SCRIPT_PATH" /usr/local/bin/cj
             chmod +x "$SCRIPT_PATH"
         else
-            # 网络直接 curl 运行的，将脚本实体下载到系统目录中
-            echo "检测到您正在使用网络一键连接运行，正在下载脚本实体到本地..."
-            # 注意：此处网址请在第二步完成后，替换为你自己的 GitHub Raw 真实链接
-            curl -fsSL -o /usr/local/bin/easy-acme.sh "https://raw.githubusercontent.com/你的用户名/你的仓库名/main/easy-acme.sh"
+            echo "检测到您正在使用网络一键连接运行，正在自动拉取并固化脚本实体..."
+            curl -fsSL -o /usr/local/bin/easy-acme.sh "https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/install.sh"
             chmod +x /usr/local/bin/easy-acme.sh
             ln -sf /usr/local/bin/easy-acme.sh /usr/local/bin/cj
         fi
