@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-#             ⚡ cj 全能系统管理与证书脚本 (四层合拢版) ⚡
+#             ⚡ cj 全能系统管理与证书脚本 (无瑕交互版) ⚡
 # =========================================================
 
 # 1. 脚本全局常量定义
@@ -365,7 +365,7 @@ menu_nginx_management() {
                             echo "========================================================="
                             ANY_F=0
                             if [ -d "/etc/nginx/conf.d" ]; then
-                               _for conf_file in /etc/nginx/conf.d/*.conf; do
+                                for conf_file in /etc/nginx/conf.d/*.conf; do
                                     if [ -f "$conf_file" ]; then
                                         EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
                                         if [[ "$EXTRACT_DOMAIN" == *"$FILTER_DOMAIN"* ]]; then
@@ -423,11 +423,9 @@ menu_nginx_management() {
                                 EXTRACT_PASS=$(grep -oP 'proxy_pass \K[^;]+' "$conf_file" | head -n 1 | sed 's/http:\/\///')
                                 EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
                                 if [ -n "$EXTRACT_PASS" ] && [ -n "$EXTRACT_DOMAIN" ]; then
-                                    # 解析出 IP 和 端口
                                     T_IP=$(echo "$EXTRACT_PASS" | cut -d':' -f1)
                                     T_PORT=$(echo "$EXTRACT_PASS" | cut -d':' -f2)
                                     
-                                    # 🛠️ 监测优化：不依赖 curl 返回值，只测 TCP 端口是否建立连接
                                     if timeout 2 bash -c "</dev/tcp/${T_IP}/${T_PORT}" &>/dev/null; then
                                         echo "🟢 健康反代：$EXTRACT_DOMAIN ──► $EXTRACT_PASS [传输层已打通]"
                                     else
@@ -515,23 +513,18 @@ server {
                 if [ $NGINX_TEST_RC -eq 0 ]; then
                     sudo systemctl reload nginx &>/dev/null
                     
-                    # 🎯 核心进化：彻底废除应用层 HTTP 状态探测，直接走 4 层 TCP 盲测与内存校验
                     echo "🔍 正在进行宿主机传输层 TCP 握手状态联调探测..."
                     sleep 1
                     
                     TCP_CONNECTED=0
-                    # 优先盲测内网私有 IP 端口
                     if timeout 2 bash -c "</dev/tcp/${LOCAL_PRIVATE_IP}/${NG_PORT}" &>/dev/null; then
                         TCP_CONNECTED=1
-                    # 次选盲测 127.0.0.1
                     elif timeout 2 bash -c "</dev/tcp/127.0.0.1/${NG_PORT}" &>/dev/null; then
-                        # 自动修正为 127
                         sed -i "s/$LOCAL_PRIVATE_IP:$NG_PORT/127.0.0.1:$NG_PORT/g" "$CONF_FILE_PATH"
                         sudo systemctl reload nginx &>/dev/null
                         TCP_CONNECTED=1
                     fi
 
-                    # 校验 Nginx 运行内存大盘中是否已经吃下了这个虚拟域名
                     NGINX_MEM_OK=0
                     if sudo nginx -T 2>/dev/null | grep -q "server_name $NG_DOMAIN"; then
                         NGINX_MEM_OK=1
