@@ -8,32 +8,32 @@
 ONLINE_SCRIPT_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/install.sh"
 LOCAL_SCRIPT_PATH="/usr/local/bin/cj"
 
-# 2. 检查在线版本并同步更新 (带有防死循环参数 --no-update)
-if [ "$1" != "--no-update" ] && [ "$1" != "uninstall" ]; then
-    echo "🔄 正在检查在线版本并同步更新..."
-    curl -s -m 5 "$ONLINE_SCRIPT_URL" > /tmp/cj_new.sh
-    if [ -s /tmp/cj_new.sh ]; then
-        mv /tmp/cj_new.sh "$LOCAL_SCRIPT_PATH"
-        chmod +x "$LOCAL_SCRIPT_PATH"
-        echo "✅ 脚本已自动同步至最新版本！正在重新载入..."
-        exec "$LOCAL_SCRIPT_PATH" --no-update
-    else
-        echo "⚠️ 无法连接到 GitHub 更新源，将直接运行本地缓存版本。"
-    fi
-fi
-
-# 3. 脚本完全卸载逻辑
-if [ "$1" == "uninstall" ]; then
+# 2. 核心功能：脚本完全卸载逻辑函数
+perform_uninstall() {
     echo "🚨 正在准备完全卸载 cj 脚本及相关配置..."
     if [ -f "$LOCAL_SCRIPT_PATH" ]; then
-        rm -f "$LOCAL_SCRIPT_PATH"
+        sudo rm -f "$LOCAL_SCRIPT_PATH"
         echo "📌 已从系统中成功移除快捷命令：$LOCAL_SCRIPT_PATH"
     fi
     (crontab -l 2>/dev/null | grep -v "cj --no-update") | crontab -
     echo "📌 已成功清理 Crontab 自动续签定时任务。"
     echo "🎉 卸载完成！系统环境已恢复干净。"
     exit 0
-fi
+}
+
+# 3. 核心功能：在线检查并更新本地脚本函数
+perform_update() {
+    echo "🔄 正在检查在线版本并同步更新..."
+    curl -s -m 5 "$ONLINE_SCRIPT_URL" > /tmp/cj_new.sh
+    if [ -s /tmp/cj_new.sh ]; then
+        sudo mv /tmp/cj_new.sh "$LOCAL_SCRIPT_PATH"
+        sudo chmod +x "$LOCAL_SCRIPT_PATH"
+        echo "✅ 脚本已成功同步至最新版本！正在重新载入..."
+        exec "$LOCAL_SCRIPT_PATH" --no-update
+    else
+        echo "❌ 无法连接到 GitHub 更新源，更新失败，请检查网络。"
+    fi
+}
 
 # 4. 环境依赖与 acme.sh 自动化检测安装
 echo "🔍 正在检查系统依赖环境..."
@@ -78,20 +78,30 @@ fi
 echo "自动续签: 正常"
 echo "========================================================="
 echo "请选择操作："
-echo "1) 80 端口模式 ⭐(推荐)"
-echo "2) Cloudflare 模式 (使用 DNS API)"
+echo "1) 域名证书申请模块 ⭐(含 80/Cloudflare 模式)"
+echo "2) 检查并更新本地 cj 脚本"
 echo "3) 证书续签与维护 (支持一键清理失效证书)"
 echo "4) 查看证书路径 (多个域名时全列出来)"
-echo "5) 临时释放 80"
+echo "5) 临时释放 80 端口"
 echo "6) 恢复 80 端口 (重新启动被关闭的服务)"
 echo "7) 注册/修复系统快捷命令 cj"
+echo "8) 彻底卸载 cj 快捷命令及定时任务"
 echo "0) 退出脚本"
 echo "========================================================="
 
-read -p "请输入选项 [0-7]: " OPTION
+read -p "请输入选项 [0-8]: " OPTION
 
 # 7. 根据用户选择执行对应的业务逻辑
-if [ "$OPTION" == "1" ] || [ "$OPTION" == "2" ]; then
+if [ "$OPTION" == "1" ]; then
+    clear
+    echo "========================================================="
+    echo "             🔑 请选择证书申请验证模式"
+    echo "========================================================="
+    echo "1) 80 端口模式 ⭐(推荐)"
+    echo "2) Cloudflare 模式 (使用 DNS API)"
+    echo "========================================================="
+    read -p "请选择验证模式 [1-2]: " MODE_OPTION
+
     echo ""
     echo "💡 【域名输入指引说明】"
     echo "   - 如果只需要申请【单个域名】，直接输入即可（例：arm.971211.xyz）"
@@ -116,7 +126,7 @@ if [ "$OPTION" == "1" ] || [ "$OPTION" == "2" ]; then
         DOMAIN_PARAMS="$DOMAIN_PARAMS -d $i"
     done
 
-    if [ "$OPTION" == "1" ]; then
+    if [ "$MODE_OPTION" == "1" ]; then
         echo "▶️ 正在通过 80 端口模式申请证书: $DOMAINS"
         # 自动释放 80 端口防止冲突
         sudo systemctl stop nginx 2>/dev/null || true
@@ -152,6 +162,9 @@ if [ "$OPTION" == "1" ] || [ "$OPTION" == "2" ]; then
         echo "❌ 证书签发存在异常，请查看上方 acme.sh 的日志报错。"
     fi
 
+elif [ "$OPTION" == "2" ]; then
+    perform_update
+
 elif [ "$OPTION" == "3" ]; then
     echo "正在强制触发证书自动续签与维护..."
     "$HOME/.acme.sh/acme.sh" --cron --home "$HOME/.acme.sh"
@@ -185,7 +198,10 @@ elif [ "$OPTION" == "7" ]; then
     
     # 挂载每日凌晨 3 点静默自动检测续签的定时任务
     (crontab -l 2>/dev/null | grep -v "cj --no-update"; echo "0 3 * * * $LOCAL_SCRIPT_PATH --no-update > /dev/null 2>&1") | crontab -
-    echo "✅ 快捷命令 [cj] 注册成功！以后直接输入 cj 即可运行及热更新。"
+    echo "✅ 快捷命令 [cj] 注册成功！以后直接输入 cj 即可运行，输入 2 即可一键在线更新。"
+
+elif [ "$OPTION" == "8" ]; then
+    perform_uninstall
 
 elif [ "$OPTION" == "0" ]; then
     echo "👋 感谢使用，退出脚本。"
