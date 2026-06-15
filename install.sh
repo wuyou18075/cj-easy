@@ -118,14 +118,26 @@ while true; do
 
     # ----------------- 选项 1 和 选项 2 的逻辑 -----------------
     if [ "$MODE_CHOICE" = "1" ] || [ "$MODE_CHOICE" = "2" ]; then
-        read -p "👉 请输入您的域名 (输入 0 返回上一层): " DOMAIN
-        if [ "$DOMAIN" = "0" ] || [ -z "$DOMAIN" ]; then continue; fi
+        read -p "👉 请输入您的域名 (多个用逗号隔开，如 arm.971211.xyz,*.arm.971211.xyz): " RAW_INPUT_DOMAINS
+        if [ "$RAW_INPUT_DOMAINS" = "0" ] || [ -z "$RAW_INPUT_DOMAINS" ]; then continue; fi
 
-        DOMAIN=$(echo "$DOMAIN" | sed 's/_ecc//g')
+        # 核心多域名解析算法：
+        # 1. 将输入的逗号替换成空格，方便循环遍历
+        SPACE_DOMAINS=$(echo "$RAW_INPUT_DOMAINS" | tr ',' ' ')
+        
+        # 2. 提取出第一个域名，用于做文件夹和证书的命名基准 (去掉星号和_ecc防止路径非法)
+        FIRST_DOMAIN=$(echo $SPACE_DOMAINS | awk '{print $1}')
+        MAIN_NAMING_DOMAIN=$(echo "$FIRST_DOMAIN" | sed 's/\*//g' | sed 's/^\.//g' | sed 's/_ecc//g')
+
+        # 3. 拼接出符合 acme.sh 官方规范的多个 -d 参数命令字符串
+        ACME_D_PARAMS=""
+        for dm in $SPACE_DOMAINS; do
+            ACME_D_PARAMS="$ACME_D_PARAMS -d $dm"
+        done
 
         # --- 有效证书防重复申请拦截检测逻辑 ---
-        DETECT_DIR="$HOME/.acme.sh/${DOMAIN}_ecc"
-        [ ! -d "$DETECT_DIR" ] && DETECT_DIR="$HOME/.acme.sh/${DOMAIN}"
+        DETECT_DIR="$HOME/.acme.sh/${MAIN_NAMING_DOMAIN}_ecc"
+        [ ! -d "$DETECT_DIR" ] && DETECT_DIR="$HOME/.acme.sh/${MAIN_NAMING_DOMAIN}"
         
         SHOULD_ISSUE=true
         if [ -d "$DETECT_DIR" ] && [ -f "$DETECT_DIR/fullchain.cer" ]; then
@@ -137,7 +149,7 @@ while true; do
                 if [ "$EXPIRY_SECONDS" -gt "$NOW_SECONDS" ]; then
                     REMAINING_DAYS=$(( (EXPIRY_SECONDS - NOW_SECONDS) / 86400 ))
                     echo -e "${YELLOW}=========================================================${RESET}"
-                    echo -e "${YELLOW}⚠️  提醒：检测到域名 [${DOMAIN}] 的证书仍在有效期内（还剩 ${REMAINING_DAYS} 天）！${RESET}"
+                    echo -e "${YELLOW}⚠️  提醒：检测到域名 [${MAIN_NAMING_DOMAIN}] 的证书仍在有效期内（还剩 ${REMAINING_DAYS} 天）！${RESET}"
                     echo "---------------------------------------------------------"
                     echo "1) 继续使用之前的证书 (直接强制提取并建立标准路径规范)"
                     echo "2) 删除并重新申请 (覆盖旧证书)"
@@ -154,7 +166,7 @@ while true; do
 
         echo "---------------------------------------------------------"
         echo "请选择证书及私钥的导出路径："
-        echo "1) 官方通用标准路径 (直接回车默认 /etc/ssl/certs/域名/)"
+        echo "1) 官方通用标准路径 (直接回车默认 /etc/ssl/certs/主域名/)"
         echo "2) 当前路径下的 certs 文件夹 (./certs/)"
         echo "3) 完全自定义指定的路径"
         echo "0) 返回上一层"
@@ -166,7 +178,7 @@ while true; do
 
         CURRENT_DIR=$(pwd)
         if [ "$PATH_CHOICE" = "1" ]; then
-            CERT_DIR="/etc/ssl/certs/$DOMAIN"
+            CERT_DIR="/etc/ssl/certs/$MAIN_NAMING_DOMAIN"
         elif [ "$PATH_CHOICE" = "2" ]; then
             CERT_DIR="$CURRENT_DIR/certs"
         elif [ "$PATH_CHOICE" = "3" ]; then
@@ -187,7 +199,7 @@ while true; do
         fi
 
         if [ ! -f "$ACME_BIN" ]; then
-            curl https://get.acme.sh | sh -s email=admin@$DOMAIN
+            curl https://get.acme.sh | sh -s email=admin@$MAIN_NAMING_DOMAIN
         fi
         "$ACME_BIN" --set-default-ca --server letsencrypt
 
@@ -199,30 +211,30 @@ while true; do
             fi
 
             if [ "$MODE_CHOICE" = "1" ]; then
-                "$ACME_BIN" --issue --standalone -d "$DOMAIN" --keylength ec-256 --force || true
+                "$ACME_BIN" --issue --standalone $ACME_D_PARAMS --keylength ec-256 --force || true
             else
                 export CF_Token="$CF_TOKEN"
-                "$ACME_BIN" --issue --dns dns_cf -d "$DOMAIN" --keylength ec-256 --force || true
+                "$ACME_BIN" --issue --dns dns_cf $ACME_D_PARAMS --keylength ec-256 --force || true
             fi
         fi
 
         echo "正在执行规范化证书路径分发..."
-        "$ACME_BIN" --install-cert -d "$DOMAIN" --ecc \
-            --key-file       "$REAL_CERT_DIR/${DOMAIN}.key"  \
-            --fullchain-file "$REAL_CERT_DIR/${DOMAIN}.crt"
+        "$ACME_BIN" --install-cert -d "$FIRST_DOMAIN" --ecc \
+            --key-file       "$REAL_CERT_DIR/${MAIN_NAMING_DOMAIN}.key"  \
+            --fullchain-file "$REAL_CERT_DIR/${MAIN_NAMING_DOMAIN}.crt"
 
-        CONF_TARGET_DIR="$HOME/.acme.sh/${DOMAIN}_ecc"
-        [ ! -d "$CONF_TARGET_DIR" ] && CONF_TARGET_DIR="$HOME/.acme.sh/${DOMAIN}"
+        CONF_TARGET_DIR="$HOME/.acme.sh/${FIRST_DOMAIN}_ecc"
+        [ ! -d "$CONF_TARGET_DIR" ] && CONF_TARGET_DIR="$HOME/.acme.sh/${FIRST_DOMAIN}"
         if [ -d "$CONF_TARGET_DIR" ]; then
             sed -i '/Real_Export_Cert_Dir=/d' "$CONF_TARGET_DIR/$(basename $CONF_TARGET_DIR).conf" 2>/dev/null || true
-            sed -i '/Real_Export_Cert_Dir=/d' "$CONF_TARGET_DIR/${DOMAIN}.conf" 2>/dev/null || true
+            sed -i '/Real_Export_Cert_Dir=/d' "$CONF_TARGET_DIR/${FIRST_DOMAIN}.conf" 2>/dev/null || true
             echo "Real_Export_Cert_Dir='${REAL_CERT_DIR}'" >> "$CONF_TARGET_DIR/$(basename $CONF_TARGET_DIR).conf"
         fi
 
         echo -e "${GREEN}========================================================="
-        echo " 🎉 规范化证书分发成功！"
-        echo " 📄 证书路径 (.crt): $REAL_CERT_DIR/${DOMAIN}.crt"
-        echo " 🔑 私钥路径 (.key): $REAL_CERT_DIR/${DOMAIN}.key"
+        echo " 🎉 规范化多域名证书分发成功！"
+        echo " 📄 证书路径 (.crt): $REAL_CERT_DIR/${MAIN_NAMING_DOMAIN}.crt"
+        echo " 🔑 私钥路径 (.key): $REAL_CERT_DIR/${MAIN_NAMING_DOMAIN}.key"
         echo -e "=========================================================${RESET}"
         read -p "按回车键返回主菜单..."
 
@@ -239,7 +251,7 @@ while true; do
         
         for i in "${!DOMAINS[@]}"; do
             TARGET_DOM="${DOMAINS[$i]}"
-            CLEAN_DOM=$(echo "$TARGET_DOM" | sed 's/_ecc//g')
+            CLEAN_DOM=$(echo "$TARGET_DOM" | sed 's/_ecc//g' | sed 's/\*//g' | sed 's/^\.//g')
             CERT_FILE="$HOME/.acme.sh/$TARGET_DOM/fullchain.cer"
             STATUS_STR=""
             
@@ -304,7 +316,7 @@ while true; do
         echo "========================================================="
         for dir in $(find "$HOME/.acme.sh" -maxdepth 1 -type d ! -name ".acme.sh" ! -name "ca" ! -name "http.header" ! -name "dnsapi" ! -name "notify" ! -name "deploy" 2>/dev/null); do
             DOMAIN_NAME=$(basename "$dir")
-            CLEAN_NAME=$(echo "$DOMAIN_NAME" | sed 's/_ecc//g')
+            CLEAN_NAME=$(echo "$DOMAIN_NAME" | sed 's/_ecc//g' | sed 's/\*//g' | sed 's/^\.//g')
             
             CONF_FILE="$dir/${DOMAIN_NAME}.conf"
             [ ! -f "$CONF_FILE" ] && CONF_FILE="$dir/${CLEAN_NAME}.conf"
@@ -314,7 +326,7 @@ while true; do
                 EXPORT_DIR=$(grep "Real_Export_Cert_Dir=" "$CONF_FILE" | cut -d"'" -f2 || true)
             fi
             
-            echo "🌐 域名: $CLEAN_NAME"
+            echo "🌐 域名看板: $CLEAN_NAME"
             if [ -n "$EXPORT_DIR" ] && [ -f "$EXPORT_DIR/${CLEAN_NAME}.crt" ]; then
                 echo "   📄 证书 (.crt): $EXPORT_DIR/${CLEAN_NAME}.crt"
                 echo "   🔑 私钥 (.key): $EXPORT_DIR/${CLEAN_NAME}.key"
@@ -323,7 +335,7 @@ while true; do
                 echo "   🔑 私钥 (.key): $EXPORT_DIR/${DOMAIN_NAME}.key"
             else
                 echo "   📄 原始缓存证书: $dir/fullchain.cer"
-                echo "   🔑 原始缓存私钥: $dir/${CLEAN_NAME}.key"
+                echo "   🔑 原始缓存私钥: $dir/${DOMAIN_NAME}.key"
             fi
             echo "---------------------------------------------------------"
         done
