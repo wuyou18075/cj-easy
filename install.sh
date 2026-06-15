@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-#             ⚡ cj 全能系统管理与证书脚本 (内网直连版) ⚡
+#             ⚡ cj 全能系统管理与证书脚本 (现场调试版) ⚡
 # =========================================================
 
 # 1. 脚本全局常量定义
@@ -287,93 +287,143 @@ menu_nginx_management() {
                 continue
             fi
 
-            clear
-            echo "========================================================="
-            echo "📋 当前系统已挂载的有效反向代理列表一览："
-            echo "========================================================="
-            HAS_CONF=0
-            if [ -d "/etc/nginx/conf.d" ]; then
-                for conf_file in /etc/nginx/conf.d/*.conf; do
-                    if [ -f "$conf_file" ]; then
-                        HAS_CONF=1
-                        EXTRACT_PORT=$(grep -oP 'proxy_pass http://(?:127\.0\.0\.1|localhost|[\d\.]+):\K\d+' "$conf_file" | head -n 1)
-                        EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
-                        if [ -n "$EXTRACT_PORT" ] && [ -n "$EXTRACT_DOMAIN" ]; then
-                            echo " 📍 localhost:${EXTRACT_PORT}  ──►  ${EXTRACT_DOMAIN}"
-                        else
-                            echo " 📍 配置文件: $(basename "$conf_file") (自定义规则)"
+            while true; do
+                clear
+                echo "========================================================="
+                echo "📋 \"输入的域名的\"反向代理列表(默认50个)："
+                echo "========================================================="
+                COUNT=0
+                if [ -d "/etc/nginx/conf.d" ]; then
+                    for conf_file in /etc/nginx/conf.d/*.conf; do
+                        if [ -f "$conf_file" ] && [ $COUNT -lt 50 ]; then
+                            EXTRACT_PASS=$(grep -oP 'proxy_pass \K[^;]+' "$conf_file" | head -n 1 | sed 's/http:\/\///')
+                            EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
+                            if [ -n "$EXTRACT_PASS" ] && [ -n "$EXTRACT_DOMAIN" ]; then
+                                echo " 📍 $EXTRACT_PASS  ──►  $EXTRACT_DOMAIN"
+                                let COUNT++
+                            fi
                         fi
-                    fi
-                done
-            fi
-            if [ $HAS_CONF -eq 0 ]; then
-                echo "   (暂无已配置的自定义虚拟域名代理文件)"
-            fi
-            echo "========================================================="
-            echo ""
-
-            echo "🔍 正在扫描系统内有效的已签发根域名证书..."
-            VALID_DOMAINS=()
-            if [ -d "/etc/nginx/ssl" ]; then
-                for dir in /etc/nginx/ssl/*; do
-                    if [ -d "$dir" ]; then
-                        VALID_DOMAINS+=($(basename "$dir"))
-                    fi
-                done
-            fi
-
-            if [ ${#VALID_DOMAINS[@]} -eq 0 ]; then
-                echo "⚠️ 系统内未在 /etc/nginx/ssl/ 下检测到有效证书目录！"
-                read -p "请输入您要手动输入绑定的根域名 (例如 av.com): " ROOT_DOMAIN
-            else
+                    done
+                fi
+                if [ $COUNT -eq 0 ]; then
+                    echo "   (暂无已配置的自定义反向代理配置)"
+                fi
+                echo "1 一键监测无效代理,监测出来后给个是否删除无效"
+                echo "2 列出全部反向代理,选不同域名分组列出的"
                 echo "========================================================="
                 echo "📋 请选择当前电脑中有效域名的序号："
                 echo "========================================================="
+                
+                VALID_DOMAINS=()
+                if [ -d "/etc/nginx/ssl" ]; then
+                    for dir in /etc/nginx/ssl/*; do
+                        if [ -d "$dir" ]; then
+                            VALID_DOMAINS+=($(basename "$dir"))
+                        fi
+                    done
+                fi
+                
                 for i in "${!VALID_DOMAINS[@]}"; do
                     echo "$((i+1))) ${VALID_DOMAINS[$i]}"
                 done
                 echo "========================================================="
-                read -p "请输入域名对应的序号: " DOMAIN_INDEX
-                
+                read -p "请输入域名对应的序号或操作编号 [0 返回]: " USER_CHOOSE
+
+                if [ "$USER_CHOOSE" == "0" ] || [ -z "$USER_CHOOSE" ]; then
+                    break
+                elif [ "$USER_CHOOSE" == "1" ]; then
+                    clear
+                    echo "🔍 正在对全盘反向代理进行服务可用性探针监测..."
+                    echo "========================================================="
+                    if [ -d "/etc/nginx/conf.d" ]; then
+                        for conf_file in /etc/nginx/conf.d/*.conf; do
+                            if [ -f "$conf_file" ]; then
+                                EXTRACT_PASS=$(grep -oP 'proxy_pass \K[^;]+' "$conf_file" | head -n 1)
+                                EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
+                                if [ -n "$EXTRACT_PASS" ] && [ -n "$EXTRACT_DOMAIN" ]; then
+                                    CHECK_CODE=$(curl -o /dev/null -s -w "%{http_code}" -m 2 "$EXTRACT_PASS")
+                                    if [ "$CHECK_CODE" == "000" ]; then
+                                        echo "🚨 揪出无效代理：$EXTRACT_DOMAIN ($EXTRACT_PASS) [后端死掉]"
+                                        read -p "❓ 是否确认彻底删除此失效反代配置？[y/N]: " IS_DEL
+                                        if [ "$IS_DEL" == "y" ] || [ "$IS_DEL" == "Y" ]; then
+                                            sudo rm -f "$conf_file"
+                                            echo "✅ 已清除该失效文件。"
+                                        fi
+                                    else
+                                        echo "🟢 健康反代：$EXTRACT_DOMAIN ──► $EXTRACT_PASS (状态码: $CHECK_CODE)"
+                                    fi
+                                fi
+                            fi
+                        done
+                    fi
+                    sudo nginx -t &>/dev/null && sudo systemctl reload nginx &>/dev/null
+                    read -p "监测处理完毕。按回车键继续..." temp
+                    continue
+                elif [ "$USER_CHOOSE" == "2" ]; then
+                    clear
+                    echo "========================================================="
+                    echo "📋 全网反向代理资产大盘点 (按根域名分组归类)："
+                    echo "========================================================="
+                    if [ -d "/etc/nginx/conf.d" ]; then
+                        for root_d in "${VALID_DOMAINS[@]}"; do
+                            echo -e "\n📂 根域名归属: \e[36m$root_d\e[0m"
+                            echo "--------------------------------------------------------"
+                            ANY_MATCH=0
+                            for conf_file in /etc/nginx/conf.d/*.conf; do
+                                if [ -f "$conf_file" ]; then
+                                    EXTRACT_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$conf_file" | head -n 2 | tail -n 1)
+                                    if [[ "$EXTRACT_DOMAIN" == *"$root_d"* ]]; then
+                                        ANY_MATCH=1
+                                        EXTRACT_PASS=$(grep -oP 'proxy_pass \K[^;]+' "$conf_file" | head -n 1 | sed 's/http:\/\///')
+                                        echo "   📍 $EXTRACT_PASS  ──►  $EXTRACT_DOMAIN"
+                                    fi
+                                fi
+                            done
+                            if [ $ANY_MATCH -eq 0 ]; then
+                                echo "   (该域名下暂未挂载任何反代子配置文件)"
+                            fi
+                        done
+                    fi
+                    echo "========================================================="
+                    read -p "按回车键继续..." temp
+                    continue
+                fi
+
+                DOMAIN_INDEX=$USER_CHOOSE
                 if [[ "$DOMAIN_INDEX" =~ ^[0-9]+$ ]] && [ "$DOMAIN_INDEX" -le "${#VALID_DOMAINS[@]}" ] && [ "$DOMAIN_INDEX" -gt 0 ]; then
                     ROOT_DOMAIN="${VALID_DOMAINS[$((DOMAIN_INDEX-1))]}"
                 else
-                    echo "❌ 序号选择错误，回到上级菜单！"
-                    sleep 2
+                    echo "❌ 序号选择错误！"
+                    sleep 1
                     continue
                 fi
-            fi
 
-            read -p "请输入您要绑定的子域前缀 (例如 vps): " SUB_PREFIX
-            read -p "请输入本地被转发的目标端口 (例如 9900): " NG_PORT
-            
-            if [ -z "$SUB_PREFIX" ] || [ -z "$NG_PORT" ]; then
-                echo "❌ 前缀或端口输入不可为空！"
-                sleep 2
-                continue
-            fi
+                read -p "请输入您要绑定的子域前缀 (留空则随机生成4位字母数字): " SUB_PREFIX
+                if [ -z "$SUB_PREFIX" ]; then
+                    SUB_PREFIX=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 4)
+                    echo "💡 检测到输入留空，已为您自动生成随机前缀: $SUB_PREFIX"
+                fi
 
-            NG_DOMAIN="${SUB_PREFIX}.${ROOT_DOMAIN}"
-            CONF_FILE_PATH="/etc/nginx/conf.d/${NG_DOMAIN}.conf"
-            BACKUP_FILE_PATH="/tmp/${NG_DOMAIN}.conf.bak"
-            SSL_CERT_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.crt"
-            SSL_KEY_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.key"
+                read -p "请输入本地被转发的目标端口 (❗必填): " NG_PORT
+                if [ -z "$NG_PORT" ]; then
+                    echo "❌ 错误：转发端口为必填项，不允许为空！"
+                    read -p "按回车键返回..." temp
+                    continue
+                fi
 
-            # 🎯 核心改变：一步到位，直接获取系统网卡的内网私有 IP（排除 127.0.0.1 并且最稳定）
-            LOCAL_PRIVATE_IP=$(hostname -I | awk '{print $1}')
-            if [ -z "$LOCAL_PRIVATE_IP" ]; then
-                LOCAL_PRIVATE_IP="127.0.0.1" # 极端缺省防呆
-            fi
+                NG_DOMAIN="${SUB_PREFIX}.${ROOT_DOMAIN}"
+                CONF_FILE_PATH="/etc/nginx/conf.d/${NG_DOMAIN}.conf"
+                SSL_CERT_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.crt"
+                SSL_KEY_PATH="/etc/nginx/ssl/${ROOT_DOMAIN}/${ROOT_DOMAIN}.key"
 
-            # 幂等备份处理
-            if [ -f "$CONF_FILE_PATH" ]; then
-                sudo mv "$CONF_FILE_PATH" "$BACKUP_FILE_PATH"
-            else
-                sudo rm -f "$BACKUP_FILE_PATH"
-            fi
+                LOCAL_PRIVATE_IP=$(hostname -I | awk '{print $1}')
+                if [ -z "$LOCAL_PRIVATE_IP" ]; then
+                    LOCAL_PRIVATE_IP="127.0.0.1"
+                fi
 
-            sudo mkdir -p /etc/nginx/conf.d
-            echo "server {
+                # 🛠️ 现场抓脏改进：无论如何先写入文件，给足证据！
+                sudo mkdir -p /etc/nginx/conf.d
+                echo "server {
     listen 80;
     listen [::]:80;
     server_name $NG_DOMAIN;
@@ -393,7 +443,6 @@ server {
     ssl_prefer_server_ciphers on;
 
     location / {
-        # 🚀 一步到位：反代目标直接锁定内网私有 IP，完美跨越 Docker 回环网络栈壁垒！
         proxy_pass http://$LOCAL_PRIVATE_IP:$NG_PORT;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -402,44 +451,36 @@ server {
     }
 }" | sudo tee "$CONF_FILE_PATH" > /dev/null
 
-            echo "⏳ 正在测试 Nginx 443 满血配置文件架构..."
-            if sudo nginx -t &>/dev/null && sudo systemctl reload nginx &>/dev/null; then
-                echo "🔍 正在通过内网私有 IP [$LOCAL_PRIVATE_IP] 联调验证反代联通性..."
-                sleep 2
-                
-                # 联动验证
-                HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --resolve ${NG_DOMAIN}:443:127.0.0.1 -k "https://${NG_DOMAIN}/")
-                
-                if [ "$HTTP_CODE" == "502" ] || [ "$HTTP_CODE" == "000" ]; then
-                    echo "========================================================="
-                    echo "🚨 【判定配置失败】检测到通过域名访问返回了 $HTTP_CODE！"
-                    echo "💡 异常分析：请确认容器或底层服务是否真的成功跑在 $NG_PORT 端口上。"
-                    echo "🔄 正在自动启动【回滚逻辑】，撤销此次损坏的反代文件..."
-                    echo "========================================================="
+                echo "⏳ 正在对新写的反代文件进行 Nginx 核心语法校验..."
+                # 🛠️ 现场抓脏改进：直接打印真实的报错，不再静默隐藏！
+                sudo nginx -t
+                NGINX_TEST_RC=$?
+
+                if [ $NGINX_TEST_RC -eq 0 ]; then
+                    sudo systemctl reload nginx &>/dev/null
+                    echo "🔍 正在进行内网私有 IP [$LOCAL_PRIVATE_IP] 联调生存探测..."
+                    sleep 2
+                    HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --resolve ${NG_DOMAIN}:443:127.0.0.1 -k "https://${NG_DOMAIN}/")
                     
-                    sudo rm -f "$CONF_FILE_PATH"
-                    if [ -f "$BACKUP_FILE_PATH" ]; then
-                        sudo mv "$BACKUP_FILE_PATH" "$CONF_FILE_PATH"
+                    echo "========================================================="
+                    echo "📶 联调探测状态码返回结果: $HTTP_CODE"
+                    echo "🚀 铁证在此：配置文件已成功保留在: $CONF_FILE_PATH"
+                    echo "========================================================="
+                    if [ "$HTTP_CODE" == "502" ] || [ "$HTTP_CODE" == "000" ]; then
+                        echo "⚠️ 状态码异常，后端服务可能未响应，但文件已为您【强行留存】便于排查！"
+                    else
+                        echo "🎉 恭喜！全码反代完全畅通！"
                     fi
-                    sudo systemctl reload nginx
-                    echo "✅ 已成功回退到之前的配置状态，保护系统不受影响！"
                 else
                     echo "========================================================="
-                    echo "🎉 【配置成功且通过联动探测】"
-                    echo "🚀 完整子域名：$NG_DOMAIN  ──►  内网直连端口：$NG_PORT"
-                    echo "📶 联调测试状态码：$HTTP_CODE (网路健康状态优良)"
+                    echo "❌ 【Nginx 语法校验失败！】"
+                    echo "💡 调试铁证：请仔细阅读上方 Nginx 吐出的报错日志！"
+                    echo "📌 极大可能是因为 /etc/nginx/ssl/$ROOT_DOMAIN/ 下面缺少有效的证书文件导致 Nginx 拒绝载入！"
+                    echo "⚠️ 为了防止系统瘫痪，该错误文件已被强行保留，您可以退出脚本执行 cat 或 vim 去肉搏排查。"
                     echo "========================================================="
-                    sudo rm -f "$BACKUP_FILE_PATH"
                 fi
-            else
-                echo "❌ Nginx 语法校验或重载失败！执行安全自动回滚..."
-                sudo rm -f "$CONF_FILE_PATH"
-                if [ -f "$BACKUP_FILE_PATH" ]; then
-                    sudo mv "$BACKUP_FILE_PATH" "$CONF_FILE_PATH"
-                fi
-                sudo systemctl reload nginx
-            fi
-            read -p "按回车键继续..." temp
+                read -p "按回车键继续..." temp
+            done
 
         elif [ "$NG_OPTION" == "00" ]; then
             exit 0
@@ -460,7 +501,7 @@ while true; do
     echo "3) Nginx 管理模块"
     echo "4) 申请证书与维护"
     echo "5) BBR3 安装 (占位)"
-    echo "6) 网络优化 (占位)"
+    echo "6) Network 优化 (占位)"
     echo "7) 一键 SB (占位)"
     echo "8) Docker 管理 (占位)"
     echo "9) Komari 探针 (占位)"
