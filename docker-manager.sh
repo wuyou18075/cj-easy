@@ -14,20 +14,37 @@ LOCAL_DP_PATH="/usr/local/bin/dp"
 KOMARI_DIR="/cj/dockercompose"
 KOMARI_YML_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-compose-tools.yml"
 
-# 快捷方式自动固化注册与卸载函数
+# 快捷方式自动固化注册与卸载函数 (防 pipe 报错安全改良版)
 manage_dp_alias() {
     local action=$1
     if [ "$action" == "install" ]; then
-        # 获取当前正在运行的脚本自身的绝对物理路径
-        local current_script=$(readlink -f "$0")
-        
-        # 提示用户即将执行的原生命令
-        echo -e "💡 提示执行：${C_CYAN}cp $current_script $LOCAL_DP_PATH && chmod +x $LOCAL_DP_PATH${C_RESET}"
-        
-        # 强行将当前运行的完整代码复制固化到 /usr/local/bin/dp 中
-        sudo cp "$current_script" "$LOCAL_DP_PATH"
+        # 探测当前脚本的真实物理位置
+        local current_script=""
+        if [ -f "$0" ]; then
+            current_script=$(readlink -f "$0")
+        else
+            # 如果是在线 bash <(curl ...) 执行导致的 pipe 状态，尝试定位 cj 脚本位置或当前执行目录
+            current_script=$(readlink -f "${BASH_SOURCE[0]}")
+        fi
+
+        # 安全防呆：如果确实捞不到物理文件（比如完全在内存中跑），则强行提示用户从物理文件运行再注册
+        if [[ "$current_script" == *"/pipe:"* ]] || [ ! -f "$current_script" ]; then
+            echo -e "${C_YELLOW}⚠️  检测到您当前是在线直接管道执行的脚本，无法直接复制本体。${C_RESET}"
+            echo -e "${C_CYAN}💡 正在为您就地固化生成独立的 /usr/local/bin/dp 二进制外壳...${C_RESET}"
+            # 如果是管道跑的，直接把当前已经在内存里跑的这个可执行脚本的内容写进去
+            sudo cp /proc/$$/exe "$LOCAL_DP_PATH" 2>/dev/null || sudo cp "$0" "$LOCAL_DP_PATH" 2>/dev/null
+            # 如果上面失败了，我们保底写一行引导指令
+            if [ ! -s "$LOCAL_DP_PATH" ]; then
+                echo -e "💡 提示执行：${C_CYAN}请先将脚本保存为本地文件 (如 docker.sh)，然后再执行注册！${C_RESET}"
+                return 1
+            fi
+        else
+            # 物理文件存在，无脑安全复制，彻底告别 /proc/.../pipe 报错
+            echo -e "💡 提示执行：${C_CYAN}cp $current_script $LOCAL_DP_PATH && chmod +x $LOCAL_DP_PATH${C_RESET}"
+            sudo cp "$current_script" "$LOCAL_DP_PATH"
+        fi
+
         sudo chmod +x "$LOCAL_DP_PATH"
-        
         echo -e "${C_GREEN}🎉 快捷命令 [dp] 自动固化注册成功！可在任意目录直接输入 dp 唤醒。${C_RESET}"
     else
         echo -e "💡 提示执行：${C_CYAN}rm -f $LOCAL_DP_PATH${C_RESET}"
@@ -195,7 +212,7 @@ menu_komari_probe() {
             curl -s -L "$KOMARI_YML_URL" > "$KOMARI_DIR/docker-compose-tools.yml"
             
             if [ ! -s "$KOMARI_DIR/docker-compose-tools.yml" ]; then
-                echo "❌ 错误：拉取核心模块失败，请检查网络通路！"; sleep 2; continue
+                echo "❌ 错误：拉取核心模块失败，请检查 network 通路！"; sleep 2; continue
             fi
 
             read -p "🔑 请设置系统管理员初始用户名: " KO_USER
@@ -285,7 +302,6 @@ menu_main_logic() {
             fi
         fi
 
-        # 判断是否已经固化到全局路径
         if [ -f "$LOCAL_DP_PATH" ]; then
             DP_SHORT_TEXT=" [ 快捷命令: dp ]"
         else
