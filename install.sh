@@ -13,6 +13,9 @@ LINE_GRAY="${C_GRAY}---------------------------------------------------------${C
 ONLINE_SCRIPT_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/install.sh"
 LOCAL_SCRIPT_PATH="/usr/local/bin/cj"
 NG_BACKUP_DIR="/cj/temp/nginx"
+NG_SSL_BACKUP_DIR="/cj/temp/nginx/ssl"
+KOMARI_DIR="/cj/dockercompose"
+KOMARI_YML_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-compose-tools.yml"
 
 # 更新函数
 perform_update() {
@@ -204,11 +207,14 @@ menu_nginx_management() {
         if [ "$NG_OPTION" == "1" ]; then
             clear
             echo -e "1) 智装 Nginx"
-            echo -e "2) 强力卸载 (备份现有 Config)"
+            echo -e "2) 强力卸载"
             read -p "请选择子项: " SUB_INS
             if [ "$SUB_INS" == "1" ]; then
                 if [ -d "$NG_BACKUP_DIR" ] && [ "$(ls -A $NG_BACKUP_DIR 2>/dev/null)" ]; then
-                    read -p "💡 检测到旧备份，是否直接恢复？[y/N]: " IS_RESTORE
+                    read -p "💡 检测到旧配置备份，是否恢复？[y/N]: " IS_RESTORE
+                fi
+                if [ -d "$NG_SSL_BACKUP_DIR" ] && [ "$(ls -A $NG_SSL_BACKUP_DIR 2>/dev/null)" ]; then
+                    read -p "💡 检测到缓存的 SSL 证书，是否一键恢复？[y/N]: " IS_SSL_RESTORE
                 fi
                 if command -v apt-get &> /dev/null; then
                     sudo apt-get update && sudo apt-get install -y nginx
@@ -217,18 +223,29 @@ menu_nginx_management() {
                 fi
                 if [ "$IS_RESTORE" == "y" ] || [ "$IS_RESTORE" == "Y" ]; then
                     sudo cp -r $NG_BACKUP_DIR/* /etc/nginx/ 2>/dev/null
-                    echo "🎉 历史备份配置已恢复。"
+                fi
+                if [ "$IS_SSL_RESTORE" == "y" ] || [ "$IS_SSL_RESTORE" == "Y" ]; then
+                    sudo mkdir -p /etc/nginx/ssl
+                    sudo cp -r $NG_SSL_BACKUP_DIR/* /etc/nginx/ssl/ 2>/dev/null
                 fi
                 sudo systemctl enable nginx &>/dev/null
                 sudo systemctl start nginx &>/dev/null
-                echo "✅ 安装完成。"; sleep 1
+                echo "✅ 安装配置完成。"; sleep 1
             elif [ "$SUB_INS" == "2" ]; then
-                read -p "❓ 卸载前是否备份配置到 $NG_BACKUP_DIR ？[y/N]: " IS_BAK
+                read -p "❓ 是否备份当前 Config 配置？[y/N]: " IS_BAK
+                read -p "❓ 是否缓存当前 SSL 证书资产？(回车默认缓存) [Y/n]: " IS_SSL_BAK
+                [ -z "$IS_SSL_BAK" ] && IS_SSL_BAK="y"
+
                 if [ "$IS_BAK" == "y" ] || [ "$IS_BAK" == "Y" ]; then
                     sudo rm -rf "$NG_BACKUP_DIR" && sudo mkdir -p "$NG_BACKUP_DIR"
                     [ -d "/etc/nginx" ] && sudo cp -r /etc/nginx/* "$NG_BACKUP_DIR/"
-                    echo "✅ 配置已备份。"
                 fi
+                if [ "$IS_SSL_BAK" == "y" ] || [ "$IS_SSL_BAK" == "Y" ]; then
+                    sudo rm -rf "$NG_SSL_BACKUP_DIR" && sudo mkdir -p "$NG_SSL_BACKUP_DIR"
+                    [ -d "/etc/nginx/ssl" ] && sudo cp -r /etc/nginx/ssl/* "$NG_SSL_BACKUP_DIR/"
+                    echo "✅ 证书已缓存到: $NG_SSL_BACKUP_DIR"
+                fi
+
                 sudo systemctl stop nginx 2>/dev/null || true
                 if command -v apt-get &> /dev/null; then
                     sudo apt-get purge -y nginx nginx-common nginx-core && sudo apt-get autoremove -y
@@ -422,27 +439,26 @@ server {
             echo -e "${C_GREEN}✅ 端口改写应用成功！${C_RESET}"; sleep 1
 
         elif [ "$NG_OPTION" == "4" ]; then
-            # 聚合式管理服务菜单
             clear
             echo -e "${C_BLUE}⚡ Nginx 服务进程调控中心${C_RESET}"
             echo -e "${LINE_GRAY}"
-            echo -e "1) 启动当前服务"
-            echo -e "2) 注册为系统进程 (实现机器重启自动死灰复燃启动)"
-            echo -e "3) 强力重新启动"
-            echo -e "4) 停止当前服务"
+            echo -e "1) 启动服务                   👉 (systemctl start nginx)"
+            echo -e "2) 注册开机自启 (自动从启)      👉 (systemctl enable nginx)"
+            echo -e "3) 强力重新启动                👉 (systemctl restart nginx)"
+            echo -e "4) 停止当前服务               👉 (systemctl stop nginx)"
             echo -e "0) 返回上一层"
             echo -e "${LINE_GRAY}"
             read -p "请选择控制指令: " SVC_OPT
             if [ "$SVC_OPT" == "1" ]; then
                 sudo nginx -t &>/dev/null && sudo systemctl start nginx && echo "✅ 启动成功"
             elif [ "$SVC_OPT" == "2" ]; then
-                sudo systemctl enable nginx &>/dev/null && echo "✅ 已成功注册全局系统开机自启进程！"
+                sudo systemctl enable nginx &>/dev/null && echo "✅ 已注册全局系统开机自启进程！"
             elif [ "$SVC_OPT" == "3" ]; then
                 sudo nginx -t &>/dev/null && (sudo systemctl restart nginx 2>/dev/null || sudo systemctl start nginx) && echo "✅ 重启成功"
             elif [ "$SVC_OPT" == "4" ]; then
                 sudo systemctl stop nginx && echo "✅ 服务已关停"
             fi
-            sleep 1.5
+            sleep 1.2
 
         elif [ "$NG_OPTION" == "6" ]; then
             clear
@@ -510,6 +526,143 @@ server {
     done
 }
 
+# 网络调优模块
+menu_network_tuning() {
+    clear
+    echo -e "${C_BLUE}⚡ Linux 核心级网络性能调控矩阵${C_RESET}"
+    echo -e "${LINE_GRAY}"
+    echo -e "1) 常规 Web 服务器 TCP 综合深度优化"
+    echo -e "2) 代理专属极速优化 (低延迟 / 宽吞吐拓扑优化)"
+    echo -e "0) 返回上一层"
+    echo -e "${LINE_GRAY}"
+    read -p "选择调优模式: " NET_OPT
+
+    if [ "$NET_OPT" == "1" ]; then
+        echo "⏳ 正在重构底层内核 Web 缓冲栈参数..."
+        sudo sysctl -w net.core.somaxconn=1024 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_max_syn_backlog=2048 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_keepalive_time=1200 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_keepalive_intvl=30 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_keepalive_probes=5 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216" 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 16777216" 2>/dev/null
+        sudo sysctl -p 2>/dev/null
+        echo -e "${C_GREEN}✅ Web TCP 综合吞吐调优完成。${C_RESET}"; sleep 1.5
+    elif [ "$NET_OPT" == "2" ]; then
+        echo "⏳ 正在注入网络代理专用低延宽带核心锁..."
+        sudo sysctl -w net.core.netdev_max_backlog=65535 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_notsent_lowat=16384 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_no_metrics_save=1 2>/dev/null
+        sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535" 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null
+        sudo sysctl -w net.ipv4.tcp_fin_timeout=15 2>/dev/null
+        sudo sysctl -w net.core.rmem_max=67108864 2>/dev/null
+        sudo sysctl -w net.core.wmem_max=67108864 2>/dev/null
+        sudo ip link set lo txqueuelen 10000 2>/dev/null
+        sudo sysctl -p 2>/dev/null
+        echo -e "${C_GREEN}✅ 代理网络低延迟专属优化完毕！${C_RESET}"; sleep 1.5
+    fi
+}
+
+# Komari 探针自动化模块
+menu_komari_probe() {
+    while true; do
+        clear
+        echo -e "${C_BLUE}⚡ Komari 自动化服务监控面板${C_RESET}"
+        echo -e "${LINE_GRAY}"
+        echo -e "1) 一键拉取部署安装"
+        echo -e "2) 热拉取最新镜像更新"
+        echo -e "3) 阻断并彻底卸载服务"
+        echo -e "4) 独立安全归类备份配置文件及项目资产"
+        echo -e "0) 返回上一层"
+        echo -e "${LINE_GRAY}"
+        read -p "选择探针控制令: " KO_OPT
+
+        if [ "$KO_OPT" == "0" ] || [ -z "$KO_OPT" ]; then break; fi
+
+        if [ "$KO_OPT" == "1" ]; then
+            echo "⏳ 正在初始化基础物理拓扑目录..."
+            sudo mkdir -p "$KOMARI_DIR/data"
+            echo "⏳ 正在同步拉取云端工具库模块..."
+            curl -s -L "$KOMARI_YML_URL" > "$KOMARI_DIR/docker-compose-tools.yml"
+            
+            if [ ! -s "$KOMARI_DIR/docker-compose-tools.yml" ]; then
+                echo "❌ 错误：拉取核心模块失败，请检查网络通路！"; sleep 2; continue
+            fi
+
+            read -p "🔑 请设置系统管理员初始用户名: " KO_USER
+            read -p "🔑 请设置系统管理员初始密码: " KO_PASS
+            [ -z "$KO_USER" ] && KO_USER="admin"
+            [ -z "$KO_PASS" ] && KO_PASS="komari_secure_pwd"
+
+            sed -i "s/ADMIN_USERNAME=.*/ADMIN_USERNAME=$KO_USER/g" "$KOMARI_DIR/docker-compose-tools.yml"
+            sed -i "s/ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$KO_PASS/g" "$KOMARI_DIR/docker-compose-tools.yml"
+            sed -i "s|-\s\./komari:|- ./data:|g" "$KOMARI_DIR/docker-compose-tools.yml"
+
+            echo "🚀 正在拉起编排多路容器群生态..."
+            docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" up -d
+            echo -e "${C_GREEN}🎉 安装部署全部完成！${C_RESET}"; sleep 1.5
+
+        elif [ "$KO_OPT" == "2" ]; then
+            if [ -f "$KOMARI_DIR/docker-compose-tools.yml" ]; then
+                echo "⏳ 正在热拉取最新镜像流..."
+                docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" pull
+                docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" up -d
+                echo -e "${C_GREEN}✅ 探针群落热升级刷新完成。${C_RESET}"
+            else
+                echo "❌ 未检测到本地部署文件，请先执行安装！"
+            fi
+            sleep 1.5
+
+        elif [ "$KO_OPT" == "3" ]; then
+            if [ -f "$KOMARI_DIR/docker-compose-tools.yml" ]; then
+                echo "🚨 正在彻底摧毁并注销该探针服务生态..."
+                docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" down -v
+                sudo rm -f "$KOMARI_DIR/docker-compose-tools.yml"
+                echo -e "${C_GREEN}✅ 服务彻底清除销毁。${C_RESET}"
+            else
+                echo "❌ 容器群文件原本就不存在。"
+            fi
+            sleep 1.5
+
+        elif [ "$KO_OPT" == "4" ]; then
+            if [ -f "$KOMARI_DIR/docker-compose-tools.yml" ]; then
+                echo -e "${C_YELLOW}⚠️  安全隐患提示：明文密码备份到本地归档文件中可能存在安全泄露风险。${C_RESET}"
+                read -p "❓ 是否确认将当前管理员账号和密码写入备份归档？(回车默认不备份) [y/N]: " IS_PWD_BAK
+                [ -z "$IS_PWD_BAK" ] && IS_PWD_BAK="n"
+
+                echo "⏳ 正在执行物理集群资产归类安全冷备份..."
+                BACKUP_TAR="/cj/temp/komari_bak_$(date +%Y%m%d%H%M%S).tar.gz"
+                sudo mkdir -p /cj/temp
+                
+                # 创建临时工作区准备打包
+                TMP_BAK_DIR="/tmp/komari_bak_dir"
+                sudo rm -rf "$TMP_BAK_DIR" && mkdir -p "$TMP_BAK_DIR"
+                
+                if [ "$IS_PWD_BAK" == "y" ] || [ "$IS_PWD_BAK" == "Y" ]; then
+                    # 从已有的 yml 文件中抽离出账号密码并安全存留
+                    EXT_USER=$(grep "ADMIN_USERNAME=" "$KOMARI_DIR/docker-compose-tools.yml" | cut -d'=' -f2)
+                    EXT_PASS=$(grep "ADMIN_PASSWORD=" "$KOMARI_DIR/docker-compose-tools.yml" | cut -d'=' -f2)
+                    echo -e "【Komari 凭证备份】\n用户名: $EXT_USER\n密码: $EXT_PASS" > "$TMP_BAK_DIR/credentials.txt"
+                fi
+
+                cp "$KOMARI_DIR/docker-compose-tools.yml" "$TMP_BAK_DIR/"
+                cp -r "$KOMARI_DIR/data" "$TMP_BAK_DIR/" 2>/dev/null
+
+                tar -czf "$BACKUP_TAR" -C "$TMP_BAK_DIR" . 2>/dev/null
+                sudo rm -rf "$TMP_BAK_DIR"
+
+                echo -e "${C_GREEN}🎉 备份完全成功！${C_RESET}"
+                echo -e "📦 物理打包压缩资产锁留存绝对路径:\n👉 ${C_CYAN}$BACKUP_TAR${C_RESET}"
+            else
+                echo "❌ 缺少本地源配置，资产无从打包。"
+            fi
+            read -p "回车继续..." temp
+        fi
+    done
+}
+
 # 全局主菜单循环
 while true; do
     clear
@@ -520,10 +673,10 @@ while true; do
     echo -e "3) Nginx 核心矩阵服务管理 ${C_YELLOW}⭐${C_RESET}"
     echo -e "4) acme.sh 自动化证书管家 ${C_YELLOW}⭐${C_RESET}"
     echo -e "5) BBR3 内核及传输层安装 (占位)"
-    echo -e "6) Network 内核吞吐优化 (占位)"
+    echo -e "6) Network 内核吞吐优化 ${C_YELLOW}⭐${C_RESET}"
     echo -e "7) 一键分布式轻量 SB (占位)"
     echo -e "8) Docker 全栈容器管理 (占位)"
-    echo -e "9) Komari 服务可用性探针 (占位)"
+    echo -e "9) Komari 服务可用性探针 ${C_YELLOW}⭐${C_RESET}"
     echo -e "98) 全局注册本地快捷命令 cj"
     echo -e "99) 强力完全卸载此脚本"
     echo -e "0) 安全退出"
@@ -545,7 +698,9 @@ while true; do
         2) perform_update ;;
         3) menu_nginx_management ;;
         4) menu_certificate_management ;;
-        5|6|7|8|9) echo "🚧 功能占位开发中..."; sleep 1.5 ;;
+        6) menu_network_tuning ;;
+        9) menu_komari_probe ;;
+        5|7|8) echo "🚧 功能占位开发中..."; sleep 1.5 ;;
         98)
             sudo cp "$0" "$LOCAL_SCRIPT_PATH"
             sudo chmod +x "$LOCAL_SCRIPT_PATH"
