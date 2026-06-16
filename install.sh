@@ -108,18 +108,20 @@ menu_certificate_management() {
             IFS=',' read -ra ADDR <<< "$DOMAINS"
             for i in "${ADDR[@]}"; do DOMAIN_PARAMS="$DOMAIN_PARAMS -d $i"; done
 
-            echo -e "\n${C_BLUE}📂 请选择证书分发路径${C_RESET}"
+            clear
+            echo -e "${C_BLUE}📂 请选择证书分发路径${C_RESET}"
             echo -e "${LINE_GRAY}"
-            echo -e "1) 家目录 (~/.acme.sh/${MAIN_DOMAIN}_ecc/)"
-            echo -e "2) Nginx 规范目录 (/etc/nginx/ssl/${MAIN_DOMAIN}/) ${C_YELLOW}⭐${C_RESET}"
-            echo -e "3) 自定义绝对路径"
+            echo -e "1) linux默认目录 (~/.acme.sh/${MAIN_DOMAIN}_ecc/)"
+            echo -e "2) Nginx默认目录 (/etc/nginx/ssl/${MAIN_DOMAIN}/) ${C_YELLOW}⭐${C_RESET}"
+            echo -e "3) 自定义路径"
             echo -e "${LINE_GRAY}"
             read -p "选择路径 [1-3]: " PATH_OPTION
 
             if [ "$PATH_OPTION" == "1" ]; then
                 TARGET_DIR="$HOME/.acme.sh/${MAIN_DOMAIN}_ecc"
             elif [ "$PATH_OPTION" == "3" ]; then
-                read -p "请输入绝对路径: " TARGET_DIR
+                read -p "请输入绝对路径 (直接回车默认当前目录): " TARGET_DIR
+                [ -z "$TARGET_DIR" ] && TARGET_DIR=$(pwd)
             else
                 TARGET_DIR="/etc/nginx/ssl/${MAIN_DOMAIN}"
             fi
@@ -565,7 +567,7 @@ menu_network_tuning() {
     fi
 }
 
-# Komari 探针自动化模块
+# Komari 探针自动化模块 (全面基于容器名 komari 进行多路捕获搜索)
 menu_komari_probe() {
     while true; do
         clear
@@ -605,43 +607,42 @@ menu_komari_probe() {
             echo -e "${C_GREEN}🎉 安装部署全部完成！${C_RESET}"; sleep 1.5
 
         elif [ "$KO_OPT" == "2" ]; then
-            if [ -f "$KOMARI_DIR/docker-compose-tools.yml" ]; then
-                echo "⏳ 正在热拉取最新镜像流..."
+            # 精准根据容器名称探查
+            if [ "$(docker ps -a --filter "name=komari" --format "{{.Names}}")" ]; then
+                echo "⏳ 正在通过容器名 komari 热追踪拉取最新镜像流..."
                 docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" pull
                 docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" up -d
                 echo -e "${C_GREEN}✅ 探针群落热升级刷新完成。${C_RESET}"
             else
-                echo "❌ 未检测到本地部署文件，请先执行安装！"
+                echo "❌ 错误：未在系统内检索到名为 komari 的活跃容器，请先安装！"
             fi
             sleep 1.5
 
         elif [ "$KO_OPT" == "3" ]; then
-            if [ -f "$KOMARI_DIR/docker-compose-tools.yml" ]; then
+            if [ "$(docker ps -a --filter "name=komari" --format "{{.Names}}")" ]; then
                 echo "🚨 正在彻底摧毁并注销该探针服务生态..."
                 docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" down -v
                 sudo rm -f "$KOMARI_DIR/docker-compose-tools.yml"
                 echo -e "${C_GREEN}✅ 服务彻底清除销毁。${C_RESET}"
             else
-                echo "❌ 容器群文件原本就不存在。"
+                echo "❌ 系统内未发现运行中的 komari 监控实例。"
             fi
             sleep 1.5
 
         elif [ "$KO_OPT" == "4" ]; then
-            if [ -f "$KOMARI_DIR/docker-compose-tools.yml" ]; then
+            if [ "$(docker ps -a --filter "name=komari" --format "{{.Names}}")" ]; then
                 echo -e "${C_YELLOW}⚠️  安全隐患提示：明文密码备份到本地归档文件中可能存在安全泄露风险。${C_RESET}"
                 read -p "❓ 是否确认将当前管理员账号和密码写入备份归档？(回车默认不备份) [y/N]: " IS_PWD_BAK
                 [ -z "$IS_PWD_BAK" ] && IS_PWD_BAK="n"
 
-                echo "⏳ 正在执行物理集群资产归类安全冷备份..."
+                echo "⏳ 正在通过容器名匹配进行物理集群资产冷备份..."
                 BACKUP_TAR="/cj/temp/komari_bak_$(date +%Y%m%d%H%M%S).tar.gz"
                 sudo mkdir -p /cj/temp
                 
-                # 创建临时工作区准备打包
                 TMP_BAK_DIR="/tmp/komari_bak_dir"
                 sudo rm -rf "$TMP_BAK_DIR" && mkdir -p "$TMP_BAK_DIR"
                 
                 if [ "$IS_PWD_BAK" == "y" ] || [ "$IS_PWD_BAK" == "Y" ]; then
-                    # 从已有的 yml 文件中抽离出账号密码并安全存留
                     EXT_USER=$(grep "ADMIN_USERNAME=" "$KOMARI_DIR/docker-compose-tools.yml" | cut -d'=' -f2)
                     EXT_PASS=$(grep "ADMIN_PASSWORD=" "$KOMARI_DIR/docker-compose-tools.yml" | cut -d'=' -f2)
                     echo -e "【Komari 凭证备份】\n用户名: $EXT_USER\n密码: $EXT_PASS" > "$TMP_BAK_DIR/credentials.txt"
@@ -656,7 +657,7 @@ menu_komari_probe() {
                 echo -e "${C_GREEN}🎉 备份完全成功！${C_RESET}"
                 echo -e "📦 物理打包压缩资产锁留存绝对路径:\n👉 ${C_CYAN}$BACKUP_TAR${C_RESET}"
             else
-                echo "❌ 缺少本地源配置，资产无从打包。"
+                echo "❌ 无法执行备份：系统底层未通过容器名检索到活跃的 komari 项目结构。"
             fi
             read -p "回车继续..." temp
         fi
