@@ -1,7 +1,8 @@
+# 1. 强行将最新的无红线全码写入本地快捷命令（不允许省略）
+cat > /usr/local/bin/cj << 'EOF'
 #!/bin/bash
 
 # 全局颜色常量定义
-C_RED="\e[31m"
 C_GREEN="\e[32m"
 C_YELLOW="\e[33m"
 C_BLUE="\e[34m"
@@ -26,7 +27,7 @@ perform_update() {
         sleep 1
         exec "$LOCAL_SCRIPT_PATH" --no-update
     else
-        echo -e "${C_RED}❌ 更新失败，请检查网络或 GitHub 仓库状态。${C_RESET}"
+        echo -e "${C_GRAY}❌ 更新失败，请检查 network 或 GitHub 仓库状态。${C_RESET}"
         read -p "按回车继续..." temp
     fi
 }
@@ -65,7 +66,7 @@ check_acme_env() {
 menu_certificate_management() {
     while true; do
         check_acme_env
-        PORT_80_CHECK=$(ss -lptn | grep -q ":80 " && echo -e "${C_RED}已占用${C_RESET}" || echo -e "${C_GREEN}未占用${C_RESET}")
+        PORT_80_CHECK=$(ss -lptn | grep -q ":80 " && echo -e "${C_CYAN}已占用${C_RESET}" || echo -e "${C_GREEN}未占用${C_RESET}")
         clear
         echo -e "${C_BLUE}⚡ 证书动态看板${C_RESET}"
         echo -e "${LINE_GRAY}"
@@ -142,7 +143,7 @@ menu_certificate_management() {
                     sudo nginx -t && sudo systemctl reload nginx 2>/dev/null || true
                 fi
             else
-                echo -e "${C_RED}❌ 签发失败，请检查 acme 日志。${C_RESET}"
+                echo -e "${C_GRAY}❌ 签发失败，请检查 acme 日志。${C_RESET}"
             fi
             read -p "按回车继续..." temp
 
@@ -180,7 +181,7 @@ menu_nginx_management() {
             [ -z "$NG_PORTS" ] && NG_PORTS="未知"
         else
             if command -v nginx &> /dev/null; then
-                NG_STATUS_TEXT="${C_RED}已停止${C_RESET}"
+                NG_STATUS_TEXT="${C_GRAY}已停止${C_RESET}"
             else
                 NG_STATUS_TEXT="${C_YELLOW}未安装${C_RESET}"
             fi
@@ -218,7 +219,7 @@ menu_nginx_management() {
                 elif command -v yum &> /dev/null; then
                     sudo yum install -y epel-release && sudo yum install -y nginx
                 fi
-                if [ "$C_RESET" == "$IS_RESTORE" ] || [ "$IS_RESTORE" == "y" ] || [ "$IS_RESTORE" == "Y" ]; then
+                if [ "$IS_RESTORE" == "y" ] || [ "$IS_RESTORE" == "Y" ]; then
                     sudo cp -r $NG_BACKUP_DIR/* /etc/nginx/ 2>/dev/null
                     echo "🎉 历史备份配置已无缝恢复。"
                 fi
@@ -326,7 +327,7 @@ menu_nginx_management() {
                                     if timeout 1.5 bash -c "</dev/tcp/${TI}/${TP}" &>/dev/null; then
                                         echo -e "🟢 健康: $ED ──► $EP"
                                     else
-                                        echo -e "${C_RED}🚨 残效: $ED ──► $EP (断连)${C_RESET}"
+                                        echo -e "${C_GRAY}🚨 残效: $ED ──► $EP (断连)${C_RESET}"
                                         read -p "是否直接切除该残效配置文件？[y/N]: " IS_DEL
                                         [ "$IS_DEL" == "y" ] || [ "$IS_DEL" == "Y" ] && sudo rm -f "$cf"
                                     fi
@@ -353,11 +354,9 @@ menu_nginx_management() {
                 NG_DOMAIN="${SUB_PREFIX}.${ROOT_DOMAIN}"
                 CONF_FILE_PATH="/etc/nginx/conf.d/${NG_DOMAIN}.conf"
                 
-                # 获取获取首个内网 IP 做兼容，无则走 127.0.0.1
                 LOCAL_PRIVATE_IP=$(hostname -I | awk '{print $1}')
                 [ -z "$LOCAL_PRIVATE_IP" ] && LOCAL_PRIVATE_IP="127.0.0.1"
 
-                # 动态自适应提取自定义端口（从默认配置或当前主配置提取，默认为80/443）
                 CUSTOM_HTTP=$(sudo grep -r "listen " /etc/nginx/conf.d/ /etc/nginx/nginx.conf 2>/dev/null | grep -v "443" | grep -oP 'listen \K[0-9]+' | head -n 1)
                 CUSTOM_HTTPS=$(sudo grep -r "listen " /etc/nginx/conf.d/ /etc/nginx/nginx.conf 2>/dev/null | grep "ssl" | grep -oP 'listen \K[0-9]+' | head -n 1)
                 [ -z "$CUSTOM_HTTP" ] && CUSTOM_HTTP="80"
@@ -391,11 +390,9 @@ server {
                 sudo nginx -t &>/dev/null
                 if [ $? -eq 0 ]; then
                     sudo systemctl reload nginx &>/dev/null
-                    # 四层联调探测
                     if timeout 1.5 bash -c "</dev/tcp/${LOCAL_PRIVATE_IP}/${NG_PORT}" &>/dev/null; then
                         echo -e "${C_GREEN}🎉 配置成功！反代已完美生效并打通后端端口。${C_RESET}"
                     else
-                        # 自动适配 127.0.0.1
                         if timeout 1.5 bash -c "</dev/tcp/127.0.0.1/${NG_PORT}" &>/dev/null; then
                             sed -i "s/$LOCAL_PRIVATE_IP:$NG_PORT/127.0.0.1:$NG_PORT/g" "$CONF_FILE_PATH"
                             sudo systemctl reload nginx &>/dev/null
@@ -405,7 +402,7 @@ server {
                         fi
                     fi
                 else
-                    echo -e "${C_RED}❌ Nginx 核心语法校验失败，请检查根证书完整度！${C_RESET}"
+                    echo -e "${C_GRAY}❌ Nginx 核心语法校验失败，请检查根证书完整度！${C_RESET}"
                     sudo rm -f "$CONF_FILE_PATH"
                 fi
                 read -p "按回车继续..." temp
@@ -417,11 +414,9 @@ server {
             [ -z "$SET_HTTP" ] && SET_HTTP="80"
             [ -z "$SET_HTTPS" ] && SET_HTTPS="443"
             
-            # 全局智能流式改写
             if [ -f "/etc/nginx/sites-enabled/default" ]; then
                 sudo sed -i -E "s/listen [0-9]+ default_server/listen $SET_HTTP default_server/g" /etc/nginx/sites-enabled/default
             fi
-            # 兼容修改现有 conf.d 下的反代入口端口
             sudo sed -i -E "s/listen [0-9]+;/listen $SET_HTTP;/g" /etc/nginx/conf.d/*.conf 2>/dev/null
             sudo sed -i -E "s/listen \[::\]:[0-9]+;/listen \[::\]:$SET_HTTP;/g" /etc/nginx/conf.d/*.conf 2>/dev/null
             sudo sed -i -E "s/listen [0-9]+ ssl;/listen $SET_HTTPS ssl;/g" /etc/nginx/conf.d/*.conf 2>/dev/null
@@ -452,7 +447,6 @@ server {
             echo -e "${LINE_GRAY}"
             read -p "请注入您需要的预设调优编号: " OPT_TYPE
             
-            # 自动化将防攻击限流与基础缓存块写进主 conf 的 http 域
             if [ -f "/etc/nginx/nginx.conf" ] && ! grep -q "limit_conn_zone" /etc/nginx/nginx.conf; then
                 sudo sed -i '/http {/a \    limit_conn_zone $binary_remote_addr zone=addr:10m;\n    limit_req_zone $binary_remote_addr zone=one:10m rate=10r/s;\n    proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=cj_cache:10m max_size=1g inactive=60m use_temp_path=off;' /etc/nginx/nginx.conf
                 sudo mkdir -p /var/cache/nginx
@@ -471,7 +465,6 @@ server {
             sudo nginx -t && sudo systemctl reload nginx 2>/dev/null
 
         elif [ "$NG_OPTION" == "7" ]; then
-            # Nano 工具智能化就地检测
             if ! command -v nano &> /dev/null; then
                 echo "📦 正在无感配置 nano 精简文字流视窗工具..."
                 if command -v apt-get &> /dev/null; then sudo apt-get update && sudo apt-get install -y nano
@@ -557,3 +550,8 @@ while true; do
         *) echo "❌ 无效编号"; sleep 1 ;;
     esac
 done
+EOF
+
+# 2. 赋予执行权限并立刻运行
+chmod +x /usr/local/bin/cj
+cj
