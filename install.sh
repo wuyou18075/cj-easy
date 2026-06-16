@@ -1,5 +1,3 @@
-# 1. 强行将最新的无红线全码写入本地快捷命令（不允许省略）
-cat > /usr/local/bin/cj << 'EOF'
 #!/bin/bash
 
 # 全局颜色常量定义
@@ -23,12 +21,12 @@ perform_update() {
     if [ -s /tmp/cj_new.sh ]; then
         sudo mv /tmp/cj_new.sh "$LOCAL_SCRIPT_PATH"
         sudo chmod +x "$LOCAL_SCRIPT_PATH"
-        echo -e "${C_GREEN}🎉 更新成功！快捷命令已就绪。${C_RESET}"
+        echo -e "${C_GREEN}🎉 更新成功！${C_RESET}"
         sleep 1
         exec "$LOCAL_SCRIPT_PATH" --no-update
     else
-        echo -e "${C_GRAY}❌ 更新失败，请检查 network 或 GitHub 仓库状态。${C_RESET}"
-        read -p "按回车继续..." temp
+        echo -e "${C_GRAY}❌ 更新失败，请检查网络。${C_RESET}"
+        read -p "回车继续..." temp
     fi
 }
 
@@ -39,7 +37,7 @@ perform_uninstall() {
         sudo rm -f "$LOCAL_SCRIPT_PATH"
     fi
     (crontab -l 2>/dev/null | grep -v "cj --no-update") | crontab -
-    echo -e "${C_GREEN}🎉 脚本及定时任务已清理干净。${C_RESET}"
+    echo -e "${C_GREEN}🎉 脚本及定时任务已清理。${C_RESET}"
     exit 0
 }
 
@@ -98,8 +96,8 @@ menu_certificate_management() {
             echo -e "${LINE_GRAY}"
             read -p "选择模式 [1-2]: " MODE_OPTION
 
-            echo -e "\n${C_CYAN}💡 域名输入规范：单域名直接输; 多个或泛域名用英文逗号隔开 (例: arm.av.com,*.arm.av.com)${C_RESET}"
-            read -p "请输入域名组合: " DOMAINS
+            echo -e "\n${C_CYAN}💡 域名输入：单域名直接输; 多个用英文逗号隔开 (例: arm.av.com,*.arm.av.com)${C_RESET}"
+            read -p "请输入域名: " DOMAINS
             if [ -z "$DOMAINS" ]; then echo "❌ 不能为空"; sleep 1; continue; fi
 
             MAIN_DOMAIN=$(echo "$DOMAINS" | cut -d',' -f1)
@@ -145,17 +143,17 @@ menu_certificate_management() {
             else
                 echo -e "${C_GRAY}❌ 签发失败，请检查 acme 日志。${C_RESET}"
             fi
-            read -p "按回车继续..." temp
+            read -p "回车继续..." temp
 
         elif [ "$CERT_OPTION" == "3" ]; then
             "$HOME/.acme.sh/acme.sh" --cron --home "$HOME/.acme.sh"
             sudo nginx -t && sudo systemctl reload nginx 2>/dev/null || true
-            read -p "按回车继续..." temp
+            read -p "回车继续..." temp
         elif [ "$CERT_OPTION" == "4" ]; then
             echo -e "${LINE_GRAY}"
             [ -d "/etc/nginx/ssl" ] && ls -R /etc/nginx/ssl/ || echo "未发现 /etc/nginx/ssl 目录"
             echo -e "${LINE_GRAY}"
-            read -p "按回车继续..." temp
+            read -p "回车继续..." temp
         elif [ "$CERT_OPTION" == "5" ]; then
             sudo systemctl stop nginx 2>/dev/null || true
             echo "80 端口已释放"; sleep 1
@@ -176,7 +174,6 @@ menu_nginx_management() {
         # 动态探测运行状态
         if command -v nginx &> /dev/null && systemctl is-active --quiet nginx; then
             NG_STATUS_TEXT="${C_GREEN}运行${C_RESET}"
-            # 动态抓取 Nginx 实际监听的端口
             NG_PORTS=$(sudo ss -tlnp | grep nginx | awk '{print $4}' | awk -F':' '{print $NF}' | sort -nu | tr '\n' ' ')
             [ -z "$NG_PORTS" ] && NG_PORTS="未知"
         else
@@ -193,13 +190,12 @@ menu_nginx_management() {
         echo -e "${LINE_GRAY}"
         echo -e " nginx 状态: $NG_STATUS_TEXT    占用端口: ${C_CYAN}${NG_PORTS}${C_RESET}"
         echo -e "${LINE_GRAY}"
-        echo -e "1) 安装 / 彻底卸载"
+        echo -e "1) 安装 / 卸载"
         echo -e "2) 配置域名反向代理 ${C_YELLOW}⭐${C_RESET}"
-        echo -e "3) 自定义修改占用端口"
-        echo -e "4) 重新启动服务"
-        echo -e "5) 关闭当前服务"
+        echo -e "3) 修改占用端口"
+        echo -e "4) 管理服务 (启动/自启/重启/停止)"
         echo -e "6) 核心级高性能优化 ${C_YELLOW}⭐${C_RESET}"
-        echo -e "7) 视窗化查看/改写配置文件"
+        echo -e "7) 配置文件"
         echo -e "0) 返回上一层"
         echo -e "00) 退出脚本"
         echo -e "${LINE_GRAY}"
@@ -207,12 +203,12 @@ menu_nginx_management() {
 
         if [ "$NG_OPTION" == "1" ]; then
             clear
-            echo -e "1) 智装 Nginx (自动检测是否有旧备份)"
-            echo -e "2) 强力卸载 (可选备份现有 Config 资产)"
+            echo -e "1) 智装 Nginx"
+            echo -e "2) 强力卸载 (备份现有 Config)"
             read -p "请选择子项: " SUB_INS
             if [ "$SUB_INS" == "1" ]; then
                 if [ -d "$NG_BACKUP_DIR" ] && [ "$(ls -A $NG_BACKUP_DIR 2>/dev/null)" ]; then
-                    read -p "💡 检测到有旧的备份配置，是否直接恢复还原？[y/N]: " IS_RESTORE
+                    read -p "💡 检测到旧备份，是否直接恢复？[y/N]: " IS_RESTORE
                 fi
                 if command -v apt-get &> /dev/null; then
                     sudo apt-get update && sudo apt-get install -y nginx
@@ -221,13 +217,13 @@ menu_nginx_management() {
                 fi
                 if [ "$IS_RESTORE" == "y" ] || [ "$IS_RESTORE" == "Y" ]; then
                     sudo cp -r $NG_BACKUP_DIR/* /etc/nginx/ 2>/dev/null
-                    echo "🎉 历史备份配置已无缝恢复。"
+                    echo "🎉 历史备份配置已恢复。"
                 fi
                 sudo systemctl enable nginx &>/dev/null
                 sudo systemctl start nginx &>/dev/null
-                echo "✅ 安装配置启动流程完毕。"; sleep 1
+                echo "✅ 安装完成。"; sleep 1
             elif [ "$SUB_INS" == "2" ]; then
-                read -p "❓ 卸载前是否将当前配置打包备份到 $NG_BACKUP_DIR ？[y/N]: " IS_BAK
+                read -p "❓ 卸载前是否备份配置到 $NG_BACKUP_DIR ？[y/N]: " IS_BAK
                 if [ "$IS_BAK" == "y" ] || [ "$IS_BAK" == "Y" ]; then
                     sudo rm -rf "$NG_BACKUP_DIR" && sudo mkdir -p "$NG_BACKUP_DIR"
                     [ -d "/etc/nginx" ] && sudo cp -r /etc/nginx/* "$NG_BACKUP_DIR/"
@@ -251,9 +247,9 @@ menu_nginx_management() {
                     for dir in /etc/nginx/ssl/*; do [ -d "$dir" ] && VALID_DOMAINS+=($(basename "$dir")); done
                 fi
                 clear
-                echo -e "${C_CYAN}📋 宿主机有效 SSL 根资产证书：${C_RESET}"
+                echo -e "${C_CYAN}📋 宿主机有效 SSL 证书：${C_RESET}"
                 if [ ${#VALID_DOMAINS[@]} -eq 0 ]; then
-                    echo "  (⚠️ /etc/nginx/ssl/ 下未检测到有效证书)"
+                    echo "  (⚠️ 未检测到有效证书)"
                 else
                     for i in "${!VALID_DOMAINS[@]}"; do echo "  $((i+1)) [ ${VALID_DOMAINS[$i]} ]"; done
                 fi
@@ -272,23 +268,23 @@ menu_nginx_management() {
                         fi
                     done
                 fi
-                [ $COUNT -eq 0 ] && echo "  (暂无已生效的反向代理配置)"
-                echo -e "\n[ a ] 展现资产大盘  [ c ] 强力清扫闭合无效代理"
+                [ $COUNT -eq 0 ] && echo "  (暂无配置)"
+                echo -e "\n[ a ] 展现资产大盘  [ c ] 清扫无效代理"
                 echo -e "${LINE_GRAY}"
-                read -p "请输入根证书序号或操作码 [0 返回]: " USER_CHOOSE
+                read -p "请输入证书序号或操作码 [0 返回]: " USER_CHOOSE
 
                 if [ "$USER_CHOOSE" == "0" ] || [ -z "$USER_CHOOSE" ]; then break
                 elif [ "$USER_CHOOSE" == "a" ] || [ "$USER_CHOOSE" == "A" ]; then
                     clear
-                    echo "1) 专项调阅指定域名的专属反代"
-                    echo "2) 归类展现全部分组域名资产"
+                    echo "1) 查看指定域名专属反代"
+                    echo "2) 展现全部分组域名资产"
                     read -p "请选子项: " SUB_A
                     if [ "$SUB_A" == "1" ]; then
                         for i in "${!VALID_DOMAINS[@]}"; do echo "  $((i+1))) ${VALID_DOMAINS[$i]}"; done
                         read -p "输入域名编号: " T_IDX
                         if [[ "$T_IDX" =~ ^[0-9]+$ ]] && [ "$T_IDX" -le "${#VALID_DOMAINS[@]}" ]; then
                             F_DOM="${VALID_DOMAINS[$((T_IDX-1))]}"
-                            echo -e "🔎 属于 [ $F_DOM ] 的反代明细:"
+                            echo -e "🔎 [ $F_DOM ] 反代明细:"
                             for cf in /etc/nginx/conf.d/*.conf; do
                                 if [ -f "$cf" ]; then
                                     ED=$(grep -oP 'server_name \K[^;]+' "$cf" | head -n 2 | tail -n 1)
@@ -313,10 +309,10 @@ menu_nginx_management() {
                             done
                         done
                     fi
-                    read -p "按回车继续..." temp; continue
+                    read -p "回车继续..." temp; continue
                 elif [ "$USER_CHOOSE" == "c" ] || [ "$USER_CHOOSE" == "C" ]; then
                     clear
-                    echo "🔍 正在进行物理传输层四局握手深度雷达探测..."
+                    echo "🔍 正在进行物理传输层探测..."
                     if [ -d "/etc/nginx/conf.d" ]; then
                         for cf in /etc/nginx/conf.d/*.conf; do
                             if [ -f "$cf" ]; then
@@ -327,8 +323,8 @@ menu_nginx_management() {
                                     if timeout 1.5 bash -c "</dev/tcp/${TI}/${TP}" &>/dev/null; then
                                         echo -e "🟢 健康: $ED ──► $EP"
                                     else
-                                        echo -e "${C_GRAY}🚨 残效: $ED ──► $EP (断连)${C_RESET}"
-                                        read -p "是否直接切除该残效配置文件？[y/N]: " IS_DEL
+                                        echo -e "${C_GRAY}🚨 断连: $ED ──► $EP${C_RESET}"
+                                        read -p "是否彻底切除该残效配置？[y/N]: " IS_DEL
                                         [ "$IS_DEL" == "y" ] || [ "$IS_DEL" == "Y" ] && sudo rm -f "$cf"
                                     fi
                                 fi
@@ -336,7 +332,7 @@ menu_nginx_management() {
                         done
                     fi
                     sudo nginx -t &>/dev/null && sudo systemctl reload nginx &>/dev/null
-                    read -p "清理结束。按回车继续..." temp; continue
+                    read -p "清理结束。回车继续..." temp; continue
                 fi
 
                 if [[ "$USER_CHOOSE" =~ ^[0-9]+$ ]] && [ "$USER_CHOOSE" -le "${#VALID_DOMAINS[@]}" ] && [ "$USER_CHOOSE" -gt 0 ]; then
@@ -391,26 +387,26 @@ server {
                 if [ $? -eq 0 ]; then
                     sudo systemctl reload nginx &>/dev/null
                     if timeout 1.5 bash -c "</dev/tcp/${LOCAL_PRIVATE_IP}/${NG_PORT}" &>/dev/null; then
-                        echo -e "${C_GREEN}🎉 配置成功！反代已完美生效并打通后端端口。${C_RESET}"
+                        echo -e "${C_GREEN}🎉 配置成功！通路已打通。${C_RESET}"
                     else
                         if timeout 1.5 bash -c "</dev/tcp/127.0.0.1/${NG_PORT}" &>/dev/null; then
                             sed -i "s/$LOCAL_PRIVATE_IP:$NG_PORT/127.0.0.1:$NG_PORT/g" "$CONF_FILE_PATH"
                             sudo systemctl reload nginx &>/dev/null
                             echo -e "${C_GREEN}🎉 配置成功！已自动智能对齐至 127.0.0.1 环回口通路。${C_RESET}"
                         else
-                            echo -e "${C_YELLOW}⚠️ 反代规则已留存，但探测到后端目标端口 $NG_PORT 当前处于闭合挂起状态，请排查后端服务！${C_RESET}"
+                            echo -e "${C_YELLOW}⚠️ 反代已留存，但检测到目标端口 $NG_PORT 当前闭合，请检查后端！${C_RESET}"
                         fi
                     fi
                 else
-                    echo -e "${C_GRAY}❌ Nginx 核心语法校验失败，请检查根证书完整度！${C_RESET}"
+                    echo -e "${C_GRAY}❌ Nginx 语法校验失败，请检查根证书完整度！${C_RESET}"
                     sudo rm -f "$CONF_FILE_PATH"
                 fi
-                read -p "按回车继续..." temp
+                read -p "回车继续..." temp
             done
 
         elif [ "$NG_OPTION" == "3" ]; then
-            read -p "请输入自定义 HTTP 端口 (直接回车默认80): " SET_HTTP
-            read -p "请输入自定义 HTTPS 端口 (直接回车默认443): " SET_HTTPS
+            read -p "自定义 HTTP 端口 (直接回车默认80): " SET_HTTP
+            read -p "自定义 HTTPS 端口 (直接回车默认443): " SET_HTTPS
             [ -z "$SET_HTTP" ] && SET_HTTP="80"
             [ -z "$SET_HTTPS" ] && SET_HTTPS="443"
             
@@ -423,29 +419,40 @@ server {
             sudo sed -i -E "s/listen \[::\]:[0-9]+ ssl;/listen \[::\]:$SET_HTTPS ssl;/g" /etc/nginx/conf.d/*.conf 2>/dev/null
             
             sudo nginx -t && sudo systemctl restart nginx
-            echo -e "${C_GREEN}✅ 端口改写改版应用成功！${C_RESET}"; sleep 1
+            echo -e "${C_GREEN}✅ 端口改写应用成功！${C_RESET}"; sleep 1
 
         elif [ "$NG_OPTION" == "4" ]; then
-            sudo nginx -t &>/dev/null
-            if [ $? -eq 0 ]; then
-                sudo systemctl restart nginx 2>/dev/null || sudo systemctl start nginx
-                echo "✅ Nginx 启动/重启成功"; sleep 1
-            else
-                echo "❌ 语法错误，拒绝启动"; sleep 2
+            # 聚合式管理服务菜单
+            clear
+            echo -e "${C_BLUE}⚡ Nginx 服务进程调控中心${C_RESET}"
+            echo -e "${LINE_GRAY}"
+            echo -e "1) 启动当前服务"
+            echo -e "2) 注册为系统进程 (实现机器重启自动死灰复燃启动)"
+            echo -e "3) 强力重新启动"
+            echo -e "4) 停止当前服务"
+            echo -e "0) 返回上一层"
+            echo -e "${LINE_GRAY}"
+            read -p "请选择控制指令: " SVC_OPT
+            if [ "$SVC_OPT" == "1" ]; then
+                sudo nginx -t &>/dev/null && sudo systemctl start nginx && echo "✅ 启动成功"
+            elif [ "$SVC_OPT" == "2" ]; then
+                sudo systemctl enable nginx &>/dev/null && echo "✅ 已成功注册全局系统开机自启进程！"
+            elif [ "$SVC_OPT" == "3" ]; then
+                sudo nginx -t &>/dev/null && (sudo systemctl restart nginx 2>/dev/null || sudo systemctl start nginx) && echo "✅ 重启成功"
+            elif [ "$SVC_OPT" == "4" ]; then
+                sudo systemctl stop nginx && echo "✅ 服务已关停"
             fi
-        elif [ "$NG_OPTION" == "5" ]; then
-            sudo systemctl stop nginx
-            echo "✅ 服务已彻底阻断关闭"; sleep 1
+            sleep 1.5
 
         elif [ "$NG_OPTION" == "6" ]; then
             clear
-            echo -e "${C_BLUE}⚡ Nginx 顶级高性能核心级优化预设${C_RESET}"
+            echo -e "${C_BLUE}⚡ Nginx 高性能核心优化预设${C_RESET}"
             echo -e "${LINE_GRAY}"
-            echo -e "1) 低延迟预设 (开启 Tcp_nodelay / 极速握手反代)"
-            echo -e "2) 高并发预设 (极度扩充 Worker_connections / 内存级多路复用)"
-            echo -e "3) 均衡稳定预设 (经典高兼容生产标准生产调优)"
+            echo -e "1) 低延迟预设"
+            echo -e "2) 高并发预设"
+            echo -e "3) 均衡稳定预设"
             echo -e "${LINE_GRAY}"
-            read -p "请注入您需要的预设调优编号: " OPT_TYPE
+            read -p "请注入调优编号: " OPT_TYPE
             
             if [ -f "/etc/nginx/nginx.conf" ] && ! grep -q "limit_conn_zone" /etc/nginx/nginx.conf; then
                 sudo sed -i '/http {/a \    limit_conn_zone $binary_remote_addr zone=addr:10m;\n    limit_req_zone $binary_remote_addr zone=one:10m rate=10r/s;\n    proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=cj_cache:10m max_size=1g inactive=60m use_temp_path=off;' /etc/nginx/nginx.conf
@@ -454,19 +461,19 @@ server {
 
             if [ "$OPT_TYPE" == "1" ]; then
                 sudo sed -i -E 's/worker_connections [0-9]+;/worker_connections 2048;/g' /etc/nginx/nginx.conf 2>/dev/null
-                echo "✅ 低延迟优化参数已打入。"; sleep 1
+                echo "✅ 低延迟优化应用。"; sleep 1
             elif [ "$OPT_TYPE" == "2" ]; then
                 sudo sed -i -E 's/worker_connections [0-9]+;/worker_connections 65535;/g' /etc/nginx/nginx.conf 2>/dev/null
-                echo "✅ 高并发超大句柄容量参数已打入。"; sleep 1
+                echo "✅ 高并发调优应用。"; sleep 1
             elif [ "$OPT_TYPE" == "3" ]; then
                 sudo sed -i -E 's/worker_connections [0-9]+;/worker_connections 4096;/g' /etc/nginx/nginx.conf 2>/dev/null
-                echo "✅ 经典生产均衡优化已就绪。"; sleep 1
+                echo "✅ 均衡稳定调优应用。"; sleep 1
             fi
             sudo nginx -t && sudo systemctl reload nginx 2>/dev/null
 
         elif [ "$NG_OPTION" == "7" ]; then
             if ! command -v nano &> /dev/null; then
-                echo "📦 正在无感配置 nano 精简文字流视窗工具..."
+                echo "📦 正在自动配置 nano 编辑器..."
                 if command -v apt-get &> /dev/null; then sudo apt-get update && sudo apt-get install -y nano
                 elif command -v yum &> /dev/null; then sudo yum install -y nano; fi
             fi
@@ -474,16 +481,16 @@ server {
                 clear
                 echo -e "${C_CYAN}📋 请点选您要使用 nano 视窗改写的配置文件：${C_RESET}"
                 echo -e "${LINE_GRAY}"
-                echo "1) [主核心配置文件]  /etc/nginx/nginx.conf"
+                echo "1) [主核心配置] /etc/nginx/nginx.conf"
                 CONF_LIST=()
                 if [ -d "/etc/nginx/conf.d" ]; then
                     for f in /etc/nginx/conf.d/*.conf; do [ -f "$f" ] && CONF_LIST+=("$f"); done
                 fi
                 for idx in "${!CONF_LIST[@]}"; do
-                    echo "$((idx+2))) [反代子配置文件]  $(basename "${CONF_LIST[$idx]}")"
+                    echo "$((idx+2))) [反代子配置] $(basename "${CONF_LIST[$idx]}")"
                 done
                 echo -e "${LINE_GRAY}"
-                read -p "请输入对应配置文件序号 [0 返回]: " NANO_CHOOSE
+                read -p "请输入序号 [0 返回]: " NANO_CHOOSE
                 if [ "$NANO_CHOOSE" == "0" ] || [ -z "$NANO_CHOOSE" ]; then break; fi
                 if [ "$NANO_CHOOSE" == "1" ]; then
                     nano /etc/nginx/nginx.conf
@@ -533,7 +540,7 @@ while true; do
             echo " 运行时间: $(uptime -p)"
             echo " 节点时间: $(date)"
             echo -e "${LINE_GRAY}"
-            read -p "按回回车返回主菜单..." temp
+            read -p "按回车返回主菜单..." temp
             ;;
         2) perform_update ;;
         3) menu_nginx_management ;;
@@ -543,15 +550,10 @@ while true; do
             sudo cp "$0" "$LOCAL_SCRIPT_PATH"
             sudo chmod +x "$LOCAL_SCRIPT_PATH"
             (crontab -l 2>/dev/null | grep -v "cj --no-update"; echo "0 3 * * * $LOCAL_SCRIPT_PATH --no-update > /dev/null 2>&1") | crontab -
-            echo -e "${C_GREEN}✅ [cj] 全局命令注册成功。可在任意目录直接输入 cj 唤醒！${C_RESET}"; sleep 1.5
+            echo -e "${C_GREEN}✅ [cj] 命令注册成功，可在任意目录直接输入 cj 唤醒！${C_RESET}"; sleep 1.5
             ;;
         99) perform_uninstall ;;
         0) echo "👋 感谢使用。"; exit 0 ;;
         *) echo "❌ 无效编号"; sleep 1 ;;
     esac
 done
-EOF
-
-# 2. 赋予执行权限并立刻运行
-chmod +x /usr/local/bin/cj
-cj
