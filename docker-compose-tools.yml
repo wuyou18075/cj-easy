@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  #探针监控
+  komari:
+    image: ghcr.io/komari-monitor/komari:latest
+    container_name: komari
+    restart: always
+    ports:
+      - "127.0.0.1:9900:25774"
+    volumes:
+      - ./komari:/app/data
+    environment:
+      - ADMIN_USERNAME="用户名"
+      - ADMIN_PASSWORD="用户密码"
