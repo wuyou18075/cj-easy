@@ -11,27 +11,34 @@ C_RESET="\e[0m"
 
 LINE_GRAY="${C_GRAY}---------------------------------------------------------${C_RESET}"
 LOCAL_DP_PATH="/usr/local/bin/dp"
+KOMARI_DIR="/cj/dockercompose"
+KOMARI_YML_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-compose-tools.yml"
 
-# 快捷方式注册与卸载函数
+# 快捷方式自动固化注册与卸载函数
 manage_dp_alias() {
     local action=$1
     if [ "$action" == "install" ]; then
-        # 获取当前脚本的绝对路径
+        # 获取当前正在运行的脚本自身的绝对物理路径
         local current_script=$(readlink -f "$0")
-        echo "#!/bin/bash
-$current_script \"\$@\"" | sudo tee "$LOCAL_DP_PATH" > /dev/null
+        
+        # 提示用户即将执行的原生命令
+        echo -e "💡 提示执行：${C_CYAN}cp $current_script $LOCAL_DP_PATH && chmod +x $LOCAL_DP_PATH${C_RESET}"
+        
+        # 强行将当前运行的完整代码复制固化到 /usr/local/bin/dp 中
+        sudo cp "$current_script" "$LOCAL_DP_PATH"
         sudo chmod +x "$LOCAL_DP_PATH"
-        echo -e "💡 提示执行：${C_CYAN}echo '#!/bin/bash; $current_script \"\$@\"' > $LOCAL_DP_PATH && chmod +x $LOCAL_DP_PATH${C_RESET}"
-        echo -e "${C_GREEN}✅ 快捷方式 [dp] 注册成功！可在任意目录直接输入 dp 唤醒。${C_RESET}"
+        
+        echo -e "${C_GREEN}🎉 快捷命令 [dp] 自动固化注册成功！可在任意目录直接输入 dp 唤醒。${C_RESET}"
     else
-        sudo rm -f "$LOCAL_DP_PATH"
         echo -e "💡 提示执行：${C_CYAN}rm -f $LOCAL_DP_PATH${C_RESET}"
-        echo -e "${C_GREEN}✅ 快捷方式 [dp] 已成功卸载移除。${C_RESET}"
+        sudo rm -f "$LOCAL_DP_PATH"
+        echo -e "${C_GREEN}✅ 快捷命令 [dp] 已成功卸载移除。${C_RESET}"
+        exit 0
     fi
     sleep 1.5
 }
 
-# 快捷命令帮助菜单 (只显示第一层)
+# 快捷命令帮助菜单
 show_short_help() {
     echo -e "${C_BLUE}⚡ dp 命令行快捷脚标帮助${C_RESET}"
     echo -e "${LINE_GRAY}"
@@ -54,7 +61,7 @@ find_compose_files() {
     echo "${files[@]}"
 }
 
-# 智能选择/提炼 YAML 配置文件
+# 智能选择 YAML 配置文件
 select_yaml_file() {
     local explicit_file=$1
     if [ -n "$explicit_file" ] && [ -f "$explicit_file" ]; then
@@ -68,12 +75,11 @@ select_yaml_file() {
     elif [ ${#available_files[@]} -eq 1 ]; then
         echo "${available_files[0]}"
     else
-        # 存在多个文件，引导用户选择
         echo -e "${C_CYAN}📋 检测到当前目录下存在多个 Compose 配置文件：${C_RESET}" >&2
         for i in "${!available_files[@]}"; do
             echo "  $((i+1))) ${available_files[$i]}" >&2
         done
-        read -p "请选择需要操作的配置文件序号: " file_idx flocks >&2
+        read -p "请选择配置文件序号: " file_idx >&2
         if [[ "$file_idx" =~ ^[0-9]+$ ]] && [ "$file_idx" -le "${#available_files[@]}" ] && [ "$file_idx" -gt 0 ]; then
             echo "${available_files[$((file_idx-1))]}"
         else
@@ -85,16 +91,11 @@ select_yaml_file() {
 # 交互式单选/全选容器处理器
 select_container_from_project() {
     local yaml=$1
-    local action=$2 # ps, up, down, logs
-    
-    # 获取 compose 项目中的服务列表
+    local action=$2
     local services=($(docker compose -f "$yaml" config --services 2>/dev/null))
-    
     if [ ${#services[@]} -eq 0 ]; then
-        # 如果无法通过 config 解析，尝试用 ps 捞取
         services=($(docker compose -f "$yaml" ps --format "{{.Service}}" 2>/dev/null | sort -u))
     fi
-
     if [ ${#services[@]} -eq 0 ]; then
         echo "ALL"
         return
@@ -114,21 +115,17 @@ select_container_from_project() {
     fi
 }
 
-# 处理带有外置命令参数的极端穿透逻辑
+# 处理带有外置命令参数的强力透传逻辑
 handle_args_logic() {
     local cmd=$1
     shift
-    
-    # 特殊判读帮助
     if [ "$cmd" == "-h" ]; then
         show_short_help
         return
     fi
 
-    # 提取 -f 后面紧跟的参数，如果存在的话
     local yaml_path=""
     local remain_args=()
-    
     while [ $# -gt 0 ]; do
         if [ "$1" == "-f" ]; then
             yaml_path="$2"
@@ -139,14 +136,12 @@ handle_args_logic() {
         fi
     done
 
-    # 智能对齐捕获具体的 YAML 文件
     local target_yaml=$(select_yaml_file "$yaml_path")
     if [ -z "$target_yaml" ]; then
-        echo -e "${C_RED}❌ 错误：未在当前路径下找到任何符合条件的 docker-compose 配置文件！${C_RESET}"
+        echo -e "${C_RED}❌ 错误：未在当前路径下找到任何符合条件的配置！${C_RESET}"
         return
     fi
 
-    # 根据命令类型进行分流与提示学习
     case "$cmd" in
         ps)
             echo -e "💡 提示执行：${C_CYAN}docker compose -f $target_yaml ps${C_RESET}"
@@ -171,19 +166,115 @@ handle_args_logic() {
             fi
             ;;
         *)
-            # 其他透传命令兼容处理
             echo -e "💡 提示执行：${C_CYAN}docker compose -f $target_yaml $cmd ${remain_args[*]}${C_RESET}"
             docker compose -f "$target_yaml" "$cmd" "${remain_args[@]}"
             ;;
     esac
 }
 
-# =========================================================
-#                    主交互菜单逻辑块
-# =========================================================
+# Komari 探针自动化运维子模块
+menu_komari_probe() {
+    while true; do
+        clear
+        echo -e "${C_BLUE}⚡ Komari 自动化服务监控面板${C_RESET}"
+        echo -e "${LINE_GRAY}"
+        echo -e "1) 一键拉取部署安装"
+        echo -e "2) 热拉取最新镜像更新"
+        echo -e "3) 阻断并彻底卸载服务"
+        echo -e "4) 独立安全归类备份配置文件及项目资产"
+        echo -e "0) 返回上一层"
+        echo -e "${LINE_GRAY}"
+        read -p "选择探针控制令: " KO_OPT
+
+        if [ "$KO_OPT" == "0" ] || [ -z "$KO_OPT" ]; then break; fi
+
+        if [ "$KO_OPT" == "1" ]; then
+            echo "⏳ 正在初始化基础物理拓扑目录..."
+            sudo mkdir -p "$KOMARI_DIR/data"
+            echo "⏳ 正在同步拉取云端工具库模块..."
+            curl -s -L "$KOMARI_YML_URL" > "$KOMARI_DIR/docker-compose-tools.yml"
+            
+            if [ ! -s "$KOMARI_DIR/docker-compose-tools.yml" ]; then
+                echo "❌ 错误：拉取核心模块失败，请检查网络通路！"; sleep 2; continue
+            fi
+
+            read -p "🔑 请设置系统管理员初始用户名: " KO_USER
+            read -p "🔑 请设置系统管理员初始密码: " KO_PASS
+            [ -z "$KO_USER" ] && KO_USER="admin"
+            [ -z "$KO_PASS" ] && KO_PASS="komari_secure_pwd"
+
+            sed -i "s/ADMIN_USERNAME=.*/ADMIN_USERNAME=$KO_USER/g" "$KOMARI_DIR/docker-compose-tools.yml"
+            sed -i "s/ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$KO_PASS/g" "$KOMARI_DIR/docker-compose-tools.yml"
+            sed -i "s|-\s\./komari:|- ./data:|g" "$KOMARI_DIR/docker-compose-tools.yml"
+
+            echo "🚀 正在拉起编排多路容器群生态..."
+            echo -e "💡 提示执行：${C_CYAN}docker compose -f $KOMARI_DIR/docker-compose-tools.yml up -d${C_RESET}"
+            docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" up -d
+            echo -e "${C_GREEN}🎉 安装部署全部完成！${C_RESET}"; sleep 1.5
+
+        elif [ "$KO_OPT" == "2" ]; then
+            if [ "$(docker ps -a --filter "name=komari" --format "{{.Names}}")" ]; then
+                echo "⏳ 正在通过容器名 komari 热追踪拉取最新镜像流..."
+                echo -e "💡 提示执行：${C_CYAN}docker compose -f $KOMARI_DIR/docker-compose-tools.yml pull && docker compose -f $KOMARI_DIR/docker-compose-tools.yml up -d${C_RESET}"
+                docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" pull
+                docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" up -d
+                echo -e "${C_GREEN}✅ 探针群落热升级刷新完成。${C_RESET}"
+            else
+                echo "❌ 错误：未在系统内检索到名为 komari 的活跃容器，请先安装！"
+            fi
+            sleep 1.5
+
+        elif [ "$KO_OPT" == "3" ]; then
+            if [ "$(docker ps -a --filter "name=komari" --format "{{.Names}}")" ]; then
+                echo "🚨 正在彻底摧毁并注销该探针服务生态..."
+                echo -e "💡 提示执行：${C_CYAN}docker compose -f $KOMARI_DIR/docker-compose-tools.yml down -v && rm -f $KOMARI_DIR/docker-compose-tools.yml${C_RESET}"
+                docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" down -v
+                sudo rm -f "$KOMARI_DIR/docker-compose-tools.yml"
+                echo -e "${C_GREEN}✅ 服务彻底清除销毁。${C_RESET}"
+            else
+                echo "❌ 系统内未发现运行中的 komari 监控实例。"
+            fi
+            sleep 1.5
+
+        elif [ "$KO_OPT" == "4" ]; then
+            if [ "$(docker ps -a --filter "name=komari" --format "{{.Names}}")" ]; then
+                echo -e "${C_YELLOW}⚠️  安全隐患提示：明文密码备份到本地归档文件中可能存在安全泄露风险。${C_RESET}"
+                read -p "❓ 是否确认将当前管理员账号和密码写入备份归档？(回车默认不备份) [y/N]: " IS_PWD_BAK
+                [ -z "$IS_PWD_BAK" ] && IS_PWD_BAK="n"
+
+                echo "⏳ 正在通过容器名匹配进行物理集群资产冷备份..."
+                BACKUP_TAR="/cj/temp/komari_bak_$(date +%Y%m%d%H%M%S).tar.gz"
+                sudo mkdir -p /cj/temp
+                
+                TMP_BAK_DIR="/tmp/komari_bak_dir"
+                sudo rm -rf "$TMP_BAK_DIR" && mkdir -p "$TMP_BAK_DIR"
+                
+                if [ "$IS_PWD_BAK" == "y" ] || [ "$IS_PWD_BAK" == "Y" ]; then
+                    EXT_USER=$(grep "ADMIN_USERNAME=" "$KOMARI_DIR/docker-compose-tools.yml" | cut -d'=' -f2)
+                    EXT_PASS=$(grep "ADMIN_PASSWORD=" "$KOMARI_DIR/docker-compose-tools.yml" | cut -d'=' -f2)
+                    echo -e "【Komari 凭证备份】\n用户名: $EXT_USER\n密码: $EXT_PASS" > "$TMP_BAK_DIR/credentials.txt"
+                fi
+
+                cp "$KOMARI_DIR/docker-compose-tools.yml" "$TMP_BAK_DIR/"
+                cp -r "$KOMARI_DIR/data" "$TMP_BAK_DIR/" 2>/dev/null
+
+                echo -e "💡 提示执行：${C_CYAN}tar -czf $BACKUP_TAR -C $TMP_BAK_DIR .${C_RESET}"
+                tar -czf "$BACKUP_TAR" -C "$TMP_BAK_DIR" . 2>/dev/null
+                sudo rm -rf "$TMP_BAK_DIR"
+
+                echo -e "${C_GREEN}🎉 备份完全成功！${C_RESET}"
+                echo -e "📦 物理打包压缩资产锁留存绝对路径:\n👉 ${C_CYAN}$BACKUP_TAR${C_RESET}"
+            else
+                echo "❌ 无法执行备份：系统底层未通过容器名检索到活跃的 komari 项目结构。"
+            fi
+            read -p "回车继续..." temp
+        fi
+    done
+}
+
+# 主交互菜单
 menu_main_logic() {
     while true; do
-        # 1. 动态探测并回显 Docker 安装与运行状态
         if ! command -v docker &> /dev/null; then
             DOCKER_STATUS_TEXT="${C_RED}未安装${C_RESET}"
         else
@@ -194,7 +285,7 @@ menu_main_logic() {
             fi
         fi
 
-        # 2. 动态探测快捷键状态
+        # 判断是否已经固化到全局路径
         if [ -f "$LOCAL_DP_PATH" ]; then
             DP_SHORT_TEXT=" [ 快捷命令: dp ]"
         else
@@ -228,18 +319,15 @@ menu_main_logic() {
                 echo -e "2) 完全粉碎卸载 Docker 生态"
                 read -p "请选子项: " SUB_D
                 if [ "$SUB_D" == "1" ]; then
-                    echo "⏳ 正在同步系统存储库并安全部署 Docker 核心引擎..."
                     echo -e "💡 提示执行：${C_CYAN}curl -fsSL https://get.docker.com | bash${C_RESET}"
                     curl -fsSL https://get.docker.com | bash
                     sudo systemctl enable docker &>/dev/null
                     sudo systemctl start docker &>/dev/null
-                    
                     if command -v docker &> /dev/null; then
                         echo -e "${C_GREEN}🎉 Docker 安装成功！当前版本: $(docker --version)${C_RESET}"
                         read -p "❓ 是否继续安装 Docker Compose 组件？(回车默认安装) [Y/n]: " IS_COMPOSE_INS
                         [ -z "$IS_COMPOSE_INS" ] && IS_COMPOSE_INS="y"
                         if [ "$IS_COMPOSE_INS" == "y" ] || [ "$IS_COMPOSE_INS" == "Y" ]; then
-                            echo "⏳ 正在下载并配置 Compose 最新二进制核心..."
                             echo -e "💡 提示执行：${C_CYAN}apt-get install -y docker-compose-plugin${C_RESET}"
                             if command -v apt-get &> /dev/null; then
                                 sudo apt-get update && sudo apt-get install -y docker-compose-plugin
@@ -250,19 +338,17 @@ menu_main_logic() {
                         fi
                     fi
                 elif [ "$SUB_D" == "2" ]; then
-                    echo -e "${C_YELLOW}🚨 警报：这将连带删除所有现有的容器、镜像及关联的 Compose 编排文件！${C_RESET}"
                     read -p "确定彻底清洗吗？[y/N]: " IS_RM_CONFIRM
                     if [ "$IS_RM_CONFIRM" == "y" ] || [ "$IS_RM_CONFIRM" == "Y" ]; then
-                        echo "⏳ 正在移除系统底层核心组件..."
                         echo -e "💡 提示执行：${C_CYAN}apt-get purge -y docker-ce docker-compose-plugin && rm -rf /var/lib/docker${C_RESET}"
                         if command -v apt-get &> /dev/null; then
-                            sudo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras
+                            sudo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
                             sudo apt-get autoremove -y
                         elif command -v yum &> /dev/null; then
                             sudo yum remove -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
                         fi
                         sudo rm -rf /var/lib/docker /var/lib/containerd /etc/docker
-                        echo -e "${C_GREEN}✅ Docker 及其全部生态组件已干净移除。${C_RESET}"
+                        echo -e "${C_GREEN}✅ Docker 彻底卸载。${C_RESET}"
                     fi
                 fi
                 read -p "按回车继续..." temp
@@ -274,7 +360,7 @@ menu_main_logic() {
                     echo -e "${LINE_GRAY}"
                     docker compose -f "$cur_yaml" ps -a
                 else
-                    echo -e "${C_YELLOW}⚠️  提示：当前路径下未扫描到符合标准的 docker-compose.yml 配置文件。${C_RESET}"
+                    echo -e "${C_YELLOW}⚠️  提示：未扫描到符合标准的 docker-compose 配置文件。${C_RESET}"
                 fi
                 read -p "按回车继续..." temp
                 ;;
@@ -291,37 +377,32 @@ menu_main_logic() {
                 read -p "按回车继续..." temp
                 ;;
             5)
-                echo -e "${C_YELLOW}🚧 百宝箱高阶模块正在打磨开发中，敬请期待...${C_RESET}"
-                sleep 1.5
+                echo -e "${C_YELLOW}🚧 占位中...${C_RESET}"; sleep 1.5
                 ;;
             9)
-                clear
-                show_short_help
-                read -p "按回车继续..." temp
+                clear; show_short_help; read -p "按回车继续..." temp
                 ;;
             10)
                 clear
                 if [ -f "$LOCAL_DP_PATH" ]; then
-                    read -p "❓ 快捷键当前已处于启用状态，是否确认注销移除？[y/N]: " IS_UNINS
-                    [ "$IS_UNINS" == "y" ] || [ "$IS_UNINS" == "Y" ] && manage_dp_alias "uninstall"
+                    read -p "❓ 快捷键当前已启用，是否确认卸载移除？[y/N]: " IS_UNINS
+                    if [ "$IS_UNINS" == "y" ] || [ "$IS_UNINS" == "Y" ]; then
+                        manage_dp_alias "uninstall"
+                    fi
                 else
                     manage_dp_alias "install"
                 fi
                 ;;
             *)
-                echo -e "${C_RED}❌ 无效选项，请重新输入！${C_RESET}"; sleep 1
+                echo -e "${C_RED}❌ 无效选项！${C_RESET}"; sleep 1
                 ;;
         esac
     done
 }
 
-# =========================================================
-#                  脚本生命周期核心总入口
-# =========================================================
+# 判断带参执行还是进交互菜单
 if [ $# -eq 0 ]; then
-    # 没有任何参数传递，优雅切入主交互菜单
     menu_main_logic
 else
-    # 探测到携带了诸如 dp ps / dp down 等外置命令参数，强力切入快捷透传引擎
     handle_args_logic "$@"
 fi
