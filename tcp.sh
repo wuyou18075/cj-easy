@@ -117,42 +117,85 @@ run_telegram_spec_test() {
     echo -n " 🌐 Telegram DC5 [亚洲-新加坡]:   " && test_ping "$dc5_ip"
 }
 
+# 1. 深度交叉审计自适应通用调优引擎
 adaptive_tcp_tuning() {
     clear
-    echo -e "${C_BLUE}⚡ 正在启动全向链路监测，实时嗅探网速与物理时延...${C_RESET}"
+    echo -e "${C_BLUE}🛰️  正在启动全向自适应通用网络探针，深入盘查宿主机物理现状...${C_RESET}"
     echo -e "${LINE_GRAY}"
 
-    echo -e "⏳ 正在测试物理网络到骨干网的时延 (RTT)..."
-    local rtt_ms; rtt_ms=$(ping -c 3 -W 2 91.108.56.110 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
-    if [ -z "$rtt_ms" ] || [ "$rtt_ms" == "0" ]; then
-        rtt_ms="150"
-    fi
-    
-    echo -e "⏳ 正在压榨物理网卡极限公网吞吐率..."
-    local res_p; res_p=$(_execute_speed_probe)
-    local single_p=$(echo "$res_p" | cut -d'|' -f1 | grep -oE '[0-9.]+')
-    local bw_bytes=$(awk -v s="$single_p" 'BEGIN {print int(s * 1024 * 1024)}')
-    if [ -z "$bw_bytes" ] || [ "$bw_bytes" -eq 0 ]; then bw_bytes=5242880; fi
-
-    local bdp_calc; bdp_calc=$(awk -v bw="$bw_bytes" -v rtt="$rtt_ms" 'BEGIN {print int(bw * (rtt / 1000) * 2)}')
-    local total_mem; total_mem=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    local max_buf=16777216
-    local rmem_default=262144
-    local wmem_default=262144
-
-    if (( total_mem < 1050000 )); then
-        max_buf=8388608
-        rmem_default=87380
-        wmem_default=65536
-        local hardware_tag="${C_YELLOW}轻量型低内存防爆机制限制${C_RESET}"
+    # 1. 现场盘查一：CPU 架构
+    local cpu_arch; cpu_arch=$(uname -m)
+    echo -n " [1/3] 🔍 正在检索物理 CPU 芯片架构: "
+    if [[ "$cpu_arch" == *"x86_64"* || "$cpu_arch" == *"amd64"* ]]; then
+        local target_cpu="X86_64 蛮力计算核心"
+        echo -e "${C_CYAN}$target_cpu${C_RESET}"
     else
+        local target_cpu="ARM 轻量/高密度核心"
+        echo -e "${C_GREEN}$target_cpu${C_RESET}"
+    fi
+
+    # 2. 现场盘查二：内存算力规模
+    local total_mem_kb; total_mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    local total_mem_mb; total_mem_mb=$(awk -v k="$total_mem_kb" 'BEGIN {print int(k / 1024)}')
+    echo -e " [2/3] 🔍 正在核验宿主机可用内存规模: ${C_CYAN}${total_mem_mb} MB${C_RESET}"
+
+    # 3. 现场盘查三：公网 RTT 物理时延探测（拒绝云推演，直接通过ICMP发包测试）
+    echo -e " [3/3] ⏳ 正在精确嗅探物理网卡到骨干网的绝对 RTT 时延..."
+    
+    # 捕获 3 次物理延迟详情，给开发呈现完全透明的过程
+    local ping_raw; ping_raw=$(ping -c 3 -W 2 91.108.56.110 2>/dev/null)
+    local rtt_ms; rtt_ms=$(echo "$ping_raw" | tail -n 1 | awk -F '/' '{print $5}')
+    
+    if [ -z "$rtt_ms" ] || [ "$rtt_ms" == "0" ]; then 
+        rtt_ms="250"
+        echo -e "      ──► ${C_RED}[测速阻断] 目标节点拒绝 ICMP 握手，触发通用安全降轨推演预设值。${C_RESET}"
+    else
+        local t1; t1=$(echo "$ping_raw" | grep "time=" | awk -F 'time=' '{print $2}' | awk '{print $1}' | head -n 1)
+        local t2; t2=$(echo "$ping_raw" | grep "time=" | awk -F 'time=' '{print $2}' | awk '{print $1}' | head -n 2 | tail -n 1)
+        local t3; t3=$(echo "$ping_raw" | grep "time=" | awk -F 'time=' '{print $2}' | awk '{print $1}' | tail -n 1)
+        echo -e "      ──► ${C_GREEN}[物理测速成功] 成功向全球骨干网下发 3 次 ICMP 套接字包${C_RESET}"
+        echo -e "      ──► [真实回显数据] 第一次: ${t1}ms | 第二次: ${t2}ms | 第三次: ${t3}ms"
+    fi
+    echo -e "      ──► 最终物理判定平均时延 RTT 为: ${C_YELLOW}${rtt_ms} ms${C_RESET}"
+    
+    echo -e "${LINE_GRAY}"
+    echo -e "${C_BLUE}⚙️  [全自适应调优引擎分析推演与技术决断报告]${C_RESET}"
+    echo -e "${LINE_GRAY}"
+    
+    # 根据数据，白盒化展示分析与决断过程
+    if (( total_mem_kb < 1050000 )); then
+        local max_buf=8388608; local rmem_default=87380; local wmem_default=65536
+        echo -e " 💡 内存审计决断：由于系统总内存 ${C_YELLOW}< 1GB${C_RESET}，触发【轻量低内存防爆机制】。"
+        echo -e "               ──► 限制套接字读写滑窗最大边界为 ${C_GREEN}8MB${C_RESET}，防止高并发引发 OOM 崩溃。"
+    else
+        # 动态 BDP 计算
+        local res_p; res_p=$(_execute_speed_probe)
+        local single_p=$(echo "$res_p" | cut -d'|' -f1 | grep -oE '[0-9.]+')
+        local bw_bytes=$(awk -v s="$single_p" 'BEGIN {print int(s * 1024 * 1024)}')
+        [ -z "$bw_bytes" ] || [ "$bw_bytes" -eq 0 ] && bw_bytes=5242880
+        local bdp_calc=$(awk -v bw="$bw_bytes" -v rtt="$rtt_ms" 'BEGIN {print int(bw * (rtt / 1000) * 2)}')
+        
         max_buf=$bdp_calc
         if (( max_buf < 16777216 )); then max_buf=16777216; fi
         if (( max_buf > 67108864 )); then max_buf=67108864; fi
-        rmem_default=524288
-        wmem_default=524288
-        local hardware_tag="${C_GREEN}满血硬件动态 BDP 智能推荐 (时延: ${rtt_ms}ms)${C_RESET}"
+        rmem_default=524288; wmem_default=524288
+        echo -e " 💡 内存审计决断：宿主机可用物理内存为 ${C_CYAN}${total_mem_mb} MB${C_RESET}，开启【满血硬件级 BDP 动态大滑窗】。"
+        echo -e "               ──► 核心对齐公式：将协议栈双向缓冲最大边界撕开到 ${C_GREEN}$(awk -v b="$max_buf" 'BEGIN {printf "%.1f", b/1024/1024}') MB${C_RESET}。"
     fi
+
+    # 针对长肥管道 RTT 的决断
+    if (( $(echo "$rtt_ms > 150" | bc -l) )); then
+        echo -e " 💡 时延链路决断：当前时延高达 $rtt_ms ms，属于典型【跨境超级长肥管道 (LFNs)】。"
+        echo -e "               ──► ${C_GREEN}决断一${C_RESET}: 强制将 tcp_slow_start_after_idle 锁死为 0，防止突发空闲时速率回落。"
+        echo -e "               ──► ${C_GREEN}决断二${C_RESET}: 激活多重选择性确认（SACK/DSACK/FACK），拦截晚高峰高丢包重传雪崩。"
+    fi
+
+    # 针对架构的决断
+    if [[ "$cpu_arch" == *"x86_64"* || "$cpu_arch" == *"amd64"* ]]; then
+        echo -e " 💡 芯片架构决断：当前主机采用 [ $target_cpu ] 工业级硬件。"
+        echo -e "               ──► 暴力扩容全连接队列（somaxconn=32768）与内核单次软中断收包轮询配额（budget=600），轰开高并发性能锁。"
+    fi
+    echo -e "${LINE_GRAY}"
 
     local net_info; net_info=$(_get_main_interface_and_mtu)
     local current_iface; current_iface=$(echo "$net_info" | cut -d'|' -f1)
@@ -167,11 +210,6 @@ adaptive_tcp_tuning() {
     local old_idle; old_idle=$(sysctl -n net.ipv4.tcp_slow_start_after_idle 2>/dev/null)
     local old_reuse; old_reuse=$(sysctl -n net.ipv4.tcp_tw_reuse 2>/dev/null)
 
-    clear
-    echo -e "${C_BLUE}📊 系统核心网络配置调优新旧数值交叉审计报告${C_RESET}"
-    echo -e "${LINE_GRAY}"
-    echo -e " 🖥️  环境画像推演结论: $hardware_tag"
-    echo -e "${LINE_GRAY}"
     printf " %-30s | %-16s | %-16s\n" "内核核心配置调优参数项" "原本历史数值" "推演建议新值"
     echo -e "${LINE_GRAY}"
     printf " • mtu最大传输单元 (网卡级)    | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "$current_mtu" "1500 (公网标准)"
@@ -267,7 +305,6 @@ adaptive_tcp_tuning() {
         echo "net.ipv4.tcp_tw_reuse = 1" >> "$SYS_FILE"
     fi
     if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",10,"* ]]; then
-        # 💥 工业级通用全连接/硬核轮询队列配额扩展，撑大长肥管道吞吐口
         sed -i '/net.core.somaxconn/d' "$SYS_FILE"
         sed -i '/net.ipv4.tcp_max_syn_backlog/d' "$SYS_FILE"
         sed -i '/net.core.netdev_max_backlog/d' "$SYS_FILE"
@@ -289,7 +326,7 @@ adaptive_tcp_tuning() {
     if [ -n "$current_iface" ] && [ $APPLY_ALL -eq 1 ]; then
         ip link set dev "$current_iface" txqueuelen 10000 >/dev/null 2>&1
     fi
-    echo -e "\n${C_GREEN}🎉 通用自适应优化参数已成功注入，网络引擎满血复活！${C_RESET}"
+    echo -e "\n${C_GREEN}🎉 通用自适应参数已成功注入，网络引擎满血复活！${C_RESET}"
 }
 
 _execute_arena_and_choose() {
@@ -435,7 +472,7 @@ while true; do
     RECOMMEND_BUF=$(_calculate_static_bdp_recommend)
 
     echo -e "${C_BLUE}⚡ tcpt优化 (高内聚并行自适应审计看板)${C_RESET}"
-    echo -e " 🖥️  核心指标参数项          │  当前系统运行值      │  脚本推演建议值"
+    echo -e " 🖥️  核心指标参数项          │  当前系统运行值      │  脚本推推建议值"
     echo -e " ────────────────────────────┼──────────────────────┼─────────────────────"
     if [ "$MTU_NOW" == "1500" ]; then
         echo -e " • mtu最大传输单元 (网卡级)  │  ${C_GREEN}%-19s${C_RESET} │  ${C_GREEN}1500 (公网标准)${C_RESET}" "$MTU_NOW"
