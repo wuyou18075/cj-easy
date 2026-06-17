@@ -50,7 +50,6 @@ get_ipv6_status_text() {
     fi
 }
 
-# 动态获取主网卡名称及其实时 MTU 值
 _get_main_interface_and_mtu() {
     local interface
     interface=$(ip -4 route ls | grep default | grep -oP 'dev \K\S+' | head -n 1)
@@ -71,7 +70,6 @@ _calculate_static_bdp_recommend() {
     fi
 }
 
-# 2. 多维速率测试 (内部公用底层函数)
 _execute_speed_probe() {
     local test_url="http://cachefly.cachefly.net/10mb.test"
     local wget_output; wget_output=$(wget -4 --no-check-certificate --timeout=6 --tries=1 -O /dev/null "$test_url" 2>&1)
@@ -94,7 +92,7 @@ _execute_speed_probe() {
 
 run_multi_dim_speedtest() {
     echo -e "${C_CYAN}⏳ 正在下发单连接套接字，握手跨境通用 Anycast 测速点...${C_RESET}"
-    echo -e " 📍 节点位置: ${C_YELLOW}全球 Anycast 边缘分分发集群 (亚太/核心骨干网)${C_RESET}"
+    echo -e " 📍 节点位置: ${C_YELLOW}全球 Anycast 边缘分发集群 (亚太/核心骨慢网)${C_RESET}"
     echo -e " 🌐 测试网型: ${C_GRAY}http://cachefly.cachefly.net/10mb.test${C_RESET}"
     echo -e "${LINE_GRAY}"
     
@@ -104,7 +102,6 @@ run_multi_dim_speedtest() {
     echo -e " 🚀 多线程高并发极限带宽:   ${C_GREEN}(并发压榨) $(echo "$res" | cut -d'|' -f2)${C_RESET}"
 }
 
-# 3. 电报数据中心链路专项监测
 run_telegram_spec_test() {
     echo -e "⏳ 正在连通 Telegram 全球核心骨干机房进行时延与丢包率交叉监测..."
     local dc1_ip="149.154.175.50"; local dc2_ip="149.154.167.51"; local dc5_ip="91.108.56.110"
@@ -120,7 +117,6 @@ run_telegram_spec_test() {
     echo -n " 🌐 Telegram DC5 [亚洲-新加坡]:   " && test_ping "$dc5_ip"
 }
 
-# 1. 深度交叉审计调优引擎 (涵盖 MTU 智能联动优化)
 adaptive_tcp_tuning() {
     clear
     echo -e "${C_BLUE}⚡ 正在启动全向链路监测，实时嗅探网速与物理时延...${C_RESET}"
@@ -158,7 +154,6 @@ adaptive_tcp_tuning() {
         local hardware_tag="${C_GREEN}满血硬件动态 BDP 智能推荐 (时延: ${rtt_ms}ms)${C_RESET}"
     fi
 
-    # 捕获主网卡和 MTU
     local net_info; net_info=$(_get_main_interface_and_mtu)
     local current_iface; current_iface=$(echo "$net_info" | cut -d'|' -f1)
     local current_mtu; current_mtu=$(echo "$net_info" | cut -d'|' -f2)
@@ -225,7 +220,6 @@ adaptive_tcp_tuning() {
     local APPLY_ALL=0
     if [[ ",$CHOOSE_INDEX," == *",1,"* ]]; then APPLY_ALL=1; fi
 
-    # ⭐ 2) MTU 调优联动纠偏
     if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",2,"* ]]; then
         if [ -n "$current_iface" ]; then
             sudo ip link set dev "$current_iface" mtu 1500 >/dev/null 2>&1
@@ -290,15 +284,83 @@ adaptive_tcp_tuning() {
     if [ -n "$current_iface" ] && [ $APPLY_ALL -eq 1 ]; then
         ip link set dev "$current_iface" txqueuelen 10000 >/dev/null 2>&1
     fi
-    echo -e "\n${C_GREEN}🎉 所选参数参数已成功注入并物理热生效！${C_RESET}"
+    echo -e "\n${C_GREEN}🎉 所选参数已成功注入并物理热生效！${C_RESET}"
 }
 
-# 4. 更改阻塞队列
+# 内部复用竞技场核心审计与动态交互决策函数 (支持选项5和选项9)
+_execute_arena_and_choose() {
+    clear
+    echo -e "${C_BLUE}⚔️  正在启动 [Fq vs Cake 宿主机双雄数据实测竞技场]...${C_RESET}"
+    echo -e "${C_YELLOW}💡 提示：本测试为硬核 A/B 流量实测，请耐心等待 10 秒钟进行数据建模...${C_RESET}"
+    echo -e "${LINE_GRAY}"
+    
+    local saved_origin_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null)
+
+    # 1. 挂载 fq 采集
+    echo -e "⏳ 正在切入 [🚀 fq] 队列并采集公网实时传输层指标..."
+    sed -i '/net.core.default_qdisc/d' "$SYS_FILE"; echo "net.core.default_qdisc = fq" >> "$SYS_FILE"
+    sysctl -p /etc/sysctl.conf >/dev/null 2>&1
+    sleep 1
+    local fq_res; fq_res=$(_execute_speed_probe)
+    
+    # 2. 挂载 cake 采集
+    echo -e "⏳ 正在切入 [🍰 cake] 队列并采集公网实时传输层指标..."
+    sed -i '/net.core.default_qdisc/d' "$SYS_FILE"; echo "net.core.default_qdisc = cake" >> "$SYS_FILE"
+    sysctl -p /etc/sysctl.conf >/dev/null 2>&1
+    sleep 1
+    local cake_res; cake_res=$(_execute_speed_probe)
+
+    # 分离解析数据
+    local fq_s=$(echo "$fq_res" | cut -d'|' -f1); local fq_m=$(echo "$fq_res" | cut -d'|' -f2); local fq_r=$(echo "$fq_res" | cut -d'|' -f3)
+    local cake_s=$(echo "$cake_res" | cut -d'|' -f1); local cake_m=$(echo "$cake_res" | cut -d'|' -f2); local cake_r=$(echo "$cake_res" | cut -d'|' -f3)
+
+    # 数据科学算法核心：清洗并提取纯多线程带宽数字，自动推演最优优选
+    local fq_m_num=$(echo "$fq_m" | grep -oE '[0-9.]+')
+    local cake_m_num=$(echo "$cake_m" | grep -oE '[0-9.]+')
+    
+    local AUTO_RECOMMEND="fq"
+    local auto_rec_text="🚀 fq (极限吞吐)"
+    if (( $(echo "$cake_m_num > $fq_m_num" | bc -l) )); then
+        AUTO_RECOMMEND="cake"
+        auto_rec_text="🍰 cake (抗抖动优化)"
+    fi
+
+    clear
+    echo "========================================================="
+    echo "⚔️  [Fq vs Cake 真实性能交叉比对对齐报告] ⚔️"
+    echo "========================================================="
+    printf " %-18s | %-16s | %-16s\n" "核心网络监控指标" "🚀 fq (极限吞吐)" "🍰 cake (抗抖动优化)"
+    echo "========================================================="
+    printf " • 单线程物理净速率 | %-16s | %-16s\n" "$fq_s" "$cake_s"
+    printf " • 多线程高并发带宽 | %-16s | %-16s\n" "$fq_m" "$cake_m"
+    printf " • 骨干网平均时延   | %-16s | %-16s\n" "${fq_r} ms" "${cake_r} ms"
+    echo "========================================================="
+    echo -e "💡 ${C_YELLOW}【数据科学智控优选大盘推演】${C_RESET}"
+    echo -e " 本次实测大数据表明：当前线路上 ${C_GREEN}${auto_rec_text}${C_RESET} 表现更为优异！"
+    echo "========================================================="
+    echo -e " 👈 [ 1 ] 强行注入应用 🚀 fq 阻塞队列"
+    echo -e " 👈 [ 2 ] 强行注入应用 🍰 cake 阻塞队列"
+    echo -e " 👈 [ 回车 ] 默认应用数据科学推演出的最优解: ${C_GREEN}${AUTO_RECOMMEND}${C_RESET}"
+    echo "========================================================="
+    read -p "请做出您的选择决策: " ARENA_CHOOSE
+
+    local FINAL_APPLY="$AUTO_RECOMMEND"
+    if [ "$ARENA_CHOOSE" == "1" ]; then
+        FINAL_APPLY="fq"
+    elif [ "$ARENA_CHOOSE" == "2" ]; then
+        FINAL_APPLY="cake"
+    fi
+
+    sed -i '/net.core.default_qdisc/d' "$SYS_FILE"; echo "net.core.default_qdisc = $FINAL_APPLY" >> "$SYS_FILE"
+    sysctl -p /etc/sysctl.conf >/dev/null 2>&1
+    echo -e "\n${C_GREEN}🎉 队列策略成功锁定生效！当前阻塞队列已最终绑定为: $FINAL_APPLY${C_RESET}"
+    read -p "按回车键继续..." temp
+}
+
 change_qdisc_action() {
     while true; do
         clear
         local current_qdisc; current_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null)
-        local current_cc; current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
         
         echo "========================================================="
         echo -e " 当前系统的排队规则(qdisc)为: ${C_GREEN}${current_qdisc:-fq}${C_RESET}"
@@ -310,7 +372,7 @@ change_qdisc_action() {
         echo -e " ${C_GREEN}4)${C_RESET} 🔄 ${C_GREEN}pfifo_fast${C_RESET}──► ${C_YELLOW}传统无差别先入先出${C_RESET}：老旧无规则队列，易引发队头阻塞。"
         echo "========================================================="
         echo -e " ⚔️  ${C_BLUE}5) 进入 Fq vs Cake 竞技场真实性能交叉数据实测${C_RESET}"
-        echo " 9) 🚀 启动全自动网络探针智控优选"
+        echo " 9) 🚀 启动全自动网络探针智控优选 (多维测速A/B对齐版)"
         echo " 0) 返回上级菜单"
         echo "========================================================="
         read -p "请输入要切换的序号或操作编号: " Q_OPT
@@ -333,69 +395,14 @@ change_qdisc_action() {
             sed -i '/net.core.default_qdisc/d' "$SYS_FILE"; echo "net.core.default_qdisc = pfifo_fast" >> "$SYS_FILE"
             sysctl -p /etc/sysctl.conf >/dev/null 2>&1
             echo -e "${C_GREEN}✅ 阻塞队列已切换为: pfifo_fast${C_RESET}"; read -p "按回车继续..." temp; break
-            
-        elif [ "$Q_OPT" == "5" ]; then
-            clear
-            echo -e "${C_BLUE}⚔️  正在初始化 [Fq vs Cake 宿主机双雄性能实测竞技场]...${C_RESET}"
-            echo -e " 📍 实测目标 Anycast 节点: ${C_YELLOW}http://cachefly.cachefly.net/100mb.test${C_RESET}"
-            echo -e "${LINE_GRAY}"
-            
-            local saved_origin_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null)
-
-            echo -e "⏳ 正在无感切换至 [🚀 fq] 队列并采集实时传输大盘数据..."
-            sed -i '/net.core.default_qdisc/d' "$SYS_FILE"; echo "net.core.default_qdisc = fq" >> "$SYS_FILE"
-            sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-            sleep 1
-            local fq_res; fq_res=$(_execute_speed_probe)
-            
-            echo -e "⏳ 正在无感切换至 [🍰 cake] 队列并采集实时传输大盘数据..."
-            sed -i '/net.core.default_qdisc/d' "$SYS_FILE"; echo "net.core.default_qdisc = cake" >> "$SYS_FILE"
-            sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-            sleep 1
-            local cake_res; cake_res=$(_execute_speed_probe)
-
-            sed -i '/net.core.default_qdisc/d' "$SYS_FILE"; echo "net.core.default_qdisc = $saved_origin_qdisc" >> "$SYS_FILE"
-            sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-
-            local fq_s=$(echo "$fq_res" | cut -d'|' -f1); local fq_m=$(echo "$fq_res" | cut -d'|' -f2); local fq_r=$(echo "$fq_res" | cut -d'|' -f3)
-            local cake_s=$(echo "$cake_res" | cut -d'|' -f1); local cake_m=$(echo "$cake_res" | cut -d'|' -f2); local cake_r=$(echo "$cake_res" | cut -d'|' -f3)
-
-            clear
-            echo "========================================================="
-            echo "⚔️  [Fq vs Cake 真实性能交叉比对对齐报告] ⚔️"
-            echo "========================================================="
-            printf " %-18s | %-16s | %-16s\n" "核心网络监控指标" "🚀 fq (极限吞吐)" "🍰 cake (抗抖动优化)"
-            echo "========================================================="
-            printf " • 单线程物理净速率 | %-16s | %-16s\n" "$fq_s" "$cake_s"
-            printf " • 多线程高并发带宽 | %-16s | %-16s\n" "$fq_m" "$cake_m"
-            printf " • 骨干网平均时延   | %-16s | %-16s\n" "${fq_r} ms" "${cake_r} ms"
-            echo "========================================================="
-            echo -e "💡 ${C_YELLOW}【数据科学审计建议】${C_RESET}"
-            echo -e " 1. 如果你在上方看到 ${C_GREEN}fq${C_RESET} 的多线程速率更高，说明它在纯公网单向发包吞吐上更具杀伤力。"
-            echo -e " 2. 如果你处于晚高峰、高丢包、多设备挂载的环境下，建议选择 ${C_GREEN}cake${C_RESET}，它能物理平滑抗丢包，彻底消灭代理卡顿感！"
-            echo "========================================================="
-            read -p "对比评测结束。按回车键返回..." temp
-            
-        elif [ "$Q_OPT" == "9" ]; then
-            echo -e "\n⏳ 正在激活全向网络链路状态和内核协议栈探针..."
-            sleep 1
-            local rtt_check; rtt_check=$(ping -c 3 -W 2 91.108.56.110 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
-            local RECOMMEND_QDISC="fq"
-            if [[ "$current_cc" == *"bbr"* ]]; then
-                RECOMMEND_QDISC="fq"
-            elif [ -n "$rtt_check" ] && (( $(echo "$rtt_check > 180" | bc -l) )); then
-                RECOMMEND_QDISC="cake"
-            fi
-            sed -i '/net.core.default_qdisc/d' "$SYS_FILE"; echo "net.core.default_qdisc = $RECOMMEND_QDISC" >> "$SYS_FILE"
-            sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-            echo -e "${C_GREEN}🎉 智控自动优选成功！阻塞队列已绑定为: $RECOMMEND_QDISC${C_RESET}"
-            read -p "按回车键继续..." temp
+        elif [ "$Q_OPT" == "5" ] || [ "$Q_OPT" == "9" ]; then
+            # 选项5和选项9全面合并，统一走硬核 A/B 实测对齐并支持回车默认最好应用
+            _execute_arena_and_choose
             break
         fi
     done
 }
 
-# 5. 还原调优参数
 restore_sysctl_backup() {
     clear
     if [ ! -f "$BAK_FILE" ]; then
@@ -408,7 +415,6 @@ restore_sysctl_backup() {
     fi
 }
 
-# 主循环体交互菜单
 while true; do
     clear
     CC_NOW=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
@@ -420,17 +426,14 @@ while true; do
     IDLE_NOW=$(sysctl -n net.ipv4.tcp_slow_start_after_idle 2>/dev/null)
     REUSE_NOW=$(sysctl -n net.ipv4.tcp_tw_reuse 2>/dev/null)
 
-    # 动态分析提取当前网卡和实时 MTU 状态
     NET_INFO_NOW=$(_get_main_interface_and_mtu)
     MTU_NOW=$(echo "$NET_INFO_NOW" | cut -d'|' -f2)
 
     RECOMMEND_BUF=$(_calculate_static_bdp_recommend)
 
-    # 渲染终极全向深度调优实时看板 (追加网卡级 MTU 审计行)
     echo -e "${C_BLUE}⚡ tcpt优化 (高内聚并行审计看板)${C_RESET}"
     echo -e " 🖥️  核心指标参数项          │  当前系统运行值      │  脚本推演建议值"
     echo -e " ────────────────────────────┼──────────────────────┼─────────────────────"
-    # ⭐ 完美融入 MTU 并行对比监控
     if [ "$MTU_NOW" == "1500" ]; then
         echo -e " • mtu最大传输单元 (网卡级)  │  ${C_GREEN}%-19s${C_RESET} │  ${C_GREEN}1500 (公网标准)${C_RESET}" "$MTU_NOW"
     else
