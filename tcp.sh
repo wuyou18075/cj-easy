@@ -92,7 +92,7 @@ _execute_speed_probe() {
 
 run_multi_dim_speedtest() {
     echo -e "${C_CYAN}⏳ 正在下发单连接套接字，握手跨境通用 Anycast 测速点...${C_RESET}"
-    echo -e " 📍 节点位置: ${C_YELLOW}全球 Anycast 边缘分发集群 (亚太/核心骨慢网)${C_RESET}"
+    echo -e " 📍 节点位置: ${C_YELLOW}全球 Anycast 边缘分发集群 (亚太/核心骨干网)${C_RESET}"
     echo -e " 🌐 测试网型: ${C_GRAY}http://cachefly.cachefly.net/10mb.test${C_RESET}"
     echo -e "${LINE_GRAY}"
     
@@ -195,18 +195,18 @@ adaptive_tcp_tuning() {
     echo "========================================================="
     echo -e "🛠️  ${C_CYAN}请选择您要注入的调优项目序号 (支持多选，用英文逗号隔开)${C_RESET}"
     echo "========================================================="
-    echo -e " ${C_GREEN}1)${C_RESET} 🚀 一键应用上方全部优化参数 (含 MTU 网卡级修复)"
+    echo -e " ${C_GREEN}1)${C_RESET} 🚀 一键应用上方全部通用自适应调优参数 (含网卡层 MTU 1500 降轨纠偏)"
     echo -e " ${C_GREEN}2)${C_RESET} 网卡级 MTU 物理降轨纠偏项 (强焊 1500 黄金标准，防丢包)"
     echo -e " ${C_GREEN}3)${C_RESET} 拥塞算法与排队规则联动项 (bbr + fq)"
     echo -e " ${C_GREEN}4)${C_RESET} 核心网卡最大读写缓冲大小项 (rmem_max & wmem_max)"
     echo -e " ${C_GREEN}5)${C_RESET} TCP动态滑窗缓冲范围优化项 (tcp_rmem & tcp_wmem)"
-    echo -e " ${C_GREEN}6)${C_RESET} 高丢包晚高峰专项调优项 (tcp_sack & dsack & fack)"
+    echo -e " ${C_GREEN}6)${C_RESET} 💥 高丢包选择性确认抗灾项 (强开 SACK/DSACK/FACK 预防晚高峰重传雪崩)"
     echo -e " ${C_GREEN}7)${C_RESET} 跨国骨干网络显式拥塞调优项 (tcp_ecn)"
-    echo -e " ${C_GREEN}8)${C_RESET} 拒绝突发空闲连接限速降轨项 (tcp_slow_start_after_idle = 0)"
+    echo -e " ${C_GREEN}8)${C_RESET} 💥 拒绝空闲连接重置限速项 (将 tcp_slow_start_after_idle 锁死为 0)"
     echo -e " ${C_GREEN}9)${C_RESET} 高并发端口TIME_WAIT快速回收复用项 (tcp_tw_reuse)"
-    echo -e " ${C_GREEN}10)${C_RESET} 宿主机大并发高吞吐套接字队列项 (somaxconn & backlog)"
+    echo -e " ${C_GREEN}10)${C_RESET} 💥 工业级大并发泄洪队列上限项 (大幅扩容全连接队列与网卡轮询配额)"
     echo "========================================================="
-    read -p "请精准勾选需要应用的序号 [例如 1 或 2,3,5]: " CHOOSE_INDEX
+    read -p "请精准勾选需要应用的序号 [例如 1 或 6,8,10]: " CHOOSE_INDEX
 
     if [ -z "$CHOOSE_INDEX" ]; then
         echo -e "${C_YELLOW}🛑 输入为空，放弃本次保存。${C_RESET}"
@@ -267,16 +267,21 @@ adaptive_tcp_tuning() {
         echo "net.ipv4.tcp_tw_reuse = 1" >> "$SYS_FILE"
     fi
     if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",10,"* ]]; then
+        # 💥 工业级通用全连接/硬核轮询队列配额扩展，撑大长肥管道吞吐口
         sed -i '/net.core.somaxconn/d' "$SYS_FILE"
         sed -i '/net.ipv4.tcp_max_syn_backlog/d' "$SYS_FILE"
         sed -i '/net.core.netdev_max_backlog/d' "$SYS_FILE"
         sed -i '/net.ipv4.tcp_adv_win_scale/d' "$SYS_FILE"
         sed -i '/net.ipv4.tcp_notsent_lowat/d' "$SYS_FILE"
+        sed -i '/net.core.netdev_budget/d' "$SYS_FILE"
+        sed -i '/net.core.netdev_budget_usecs/d' "$SYS_FILE"
         echo "net.ipv4.tcp_adv_win_scale = 1" >> "$SYS_FILE"
         echo "net.ipv4.tcp_notsent_lowat = 16384" >> "$SYS_FILE"
-        echo "net.core.somaxconn = 4096" >> "$SYS_FILE"
-        echo "net.ipv4.tcp_max_syn_backlog = 2048" >> "$SYS_FILE"
-        echo "net.core.netdev_max_backlog = 5000" >> "$SYS_FILE"
+        echo "net.core.somaxconn = 32768" >> "$SYS_FILE"
+        echo "net.ipv4.tcp_max_syn_backlog = 16384" >> "$SYS_FILE"
+        echo "net.core.netdev_max_backlog = 65536" >> "$SYS_FILE"
+        echo "net.core.netdev_budget = 600" >> "$SYS_FILE"
+        echo "net.core.netdev_budget_usecs = 8000" >> "$SYS_FILE"
     fi
 
     sysctl -p /etc/sysctl.conf >/dev/null 2>&1
@@ -284,10 +289,9 @@ adaptive_tcp_tuning() {
     if [ -n "$current_iface" ] && [ $APPLY_ALL -eq 1 ]; then
         ip link set dev "$current_iface" txqueuelen 10000 >/dev/null 2>&1
     fi
-    echo -e "\n${C_GREEN}🎉 所选参数已成功注入并物理热生效！${C_RESET}"
+    echo -e "\n${C_GREEN}🎉 通用自适应优化参数已成功注入，网络引擎满血复活！${C_RESET}"
 }
 
-# 内部复用竞技场核心审计与动态交互决策函数 (支持选项5和选项9)
 _execute_arena_and_choose() {
     clear
     echo -e "${C_BLUE}⚔️  正在启动 [Fq vs Cake 宿主机双雄数据实测竞技场]...${C_RESET}"
@@ -314,9 +318,9 @@ _execute_arena_and_choose() {
     local fq_s=$(echo "$fq_res" | cut -d'|' -f1); local fq_m=$(echo "$fq_res" | cut -d'|' -f2); local fq_r=$(echo "$fq_res" | cut -d'|' -f3)
     local cake_s=$(echo "$cake_res" | cut -d'|' -f1); local cake_m=$(echo "$cake_res" | cut -d'|' -f2); local cake_r=$(echo "$cake_res" | cut -d'|' -f3)
 
-    # 数据科学算法核心：清洗并提取纯多线程带宽数字，自动推演最优优选
-    local fq_m_num=$(echo "$fq_m" | grep -oE '[0-9.]+')
-    local cake_m_num=$(echo "$cake_m" | grep -oE '[0-9.]+')
+    # 提取纯数字进行数据科学对齐
+    local fq_m_num=$(echo "$fq_m" | grep -oE '[0-9.]+\b' | head -n 1)
+    local cake_m_num=$(echo "$cake_m" | grep -oE '[0-9.]+\b' | head -n 1)
     
     local AUTO_RECOMMEND="fq"
     local auto_rec_text="🚀 fq (极限吞吐)"
@@ -396,7 +400,6 @@ change_qdisc_action() {
             sysctl -p /etc/sysctl.conf >/dev/null 2>&1
             echo -e "${C_GREEN}✅ 阻塞队列已切换为: pfifo_fast${C_RESET}"; read -p "按回车继续..." temp; break
         elif [ "$Q_OPT" == "5" ] || [ "$Q_OPT" == "9" ]; then
-            # 选项5和选项9全面合并，统一走硬核 A/B 实测对齐并支持回车默认最好应用
             _execute_arena_and_choose
             break
         fi
@@ -431,7 +434,7 @@ while true; do
 
     RECOMMEND_BUF=$(_calculate_static_bdp_recommend)
 
-    echo -e "${C_BLUE}⚡ tcpt优化 (高内聚并行审计看板)${C_RESET}"
+    echo -e "${C_BLUE}⚡ tcpt优化 (高内聚并行自适应审计看板)${C_RESET}"
     echo -e " 🖥️  核心指标参数项          │  当前系统运行值      │  脚本推演建议值"
     echo -e " ────────────────────────────┼──────────────────────┼─────────────────────"
     if [ "$MTU_NOW" == "1500" ]; then
@@ -440,7 +443,7 @@ while true; do
         echo -e " • mtu最大传输单元 (网卡级)  │  ${C_RED}%-19s${C_RESET} │  ${C_GREEN}1500 (公网标准)${C_RESET}" "${MTU_NOW} [异常]"
     fi
     echo -e " • 拥塞控制内核算法 (cc)     │  ${C_CYAN}%-19s${C_RESET} │  ${C_GREEN}bbr${C_RESET}" "${CC_NOW:-cubic}"
-    echo -e " • 底层阻塞队列规则 (qdisc)  │  ${C_CYAN}%-19s${C_RESET} │  ${C_GREEN}fq${C_RESET}" "${QDISC_NOW:-fq}"
+    echo -e " • 底层阻塞队列规则 (qdisc)  │  ${C_CYAN}%-19s${C_RESET} │  ${C_GREEN}fq / cake${C_RESET}" "${QDISC_NOW:-fq}"
     echo -e " • 最大套接字读缓冲 (rmem)   │  ${C_CYAN}%-19s${C_RESET} │  ${C_GREEN}%-19s${C_RESET}" "${RMEM_NOW:-212992}" "$RECOMMEND_BUF"
     echo -e " • 最大套接字写缓冲 (wmem)   │  ${C_CYAN}%-19s${C_RESET} │  ${C_GREEN}%-19s${C_RESET}" "${WMEM_NOW:-212992}" "$RECOMMEND_BUF"
     echo -e " • 选择性确认重传项 (sack)   │  ${C_CYAN}%-19s${C_RESET} │  ${C_GREEN}1 (物理开启)${C_RESET}" "${SACK_NOW:-1}"
