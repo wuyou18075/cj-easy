@@ -13,7 +13,7 @@ C_CYAN="\e[36m"
 C_GRAY="\e[90m"
 C_RESET="\e[0m"
 
-LINE_GRAY="${C_GRAY}---------------------------------------------------------${${C_RESET}}"
+LINE_GRAY="${C_GRAY}---------------------------------------------------------${C_RESET}"
 SYS_FILE="/etc/sysctl.conf"
 BAK_FILE="/etc/sysctl.conf.bak_matrix"
 
@@ -70,31 +70,6 @@ _calculate_static_bdp_recommend() {
     fi
 }
 
-# 工业级双轮科学测速底层引擎 (含冷冻休眠机制)
-_execute_speed_probe_double_wheel() {
-    echo -e " ⏳ [Round 1/2] 正在拉起第一轮单/多线程分布式套接字盘查..."
-    local res1; res1=$(_execute_speed_probe_raw)
-    local s1=$(echo "$res1" | cut -d'|' -f1 | grep -oE '[0-9.]+\b' | head -n 1)
-    local m1=$(echo "$res1" | cut -d'|' -f2 | grep -oE '[0-9.]+\b' | head -n 1)
-    local r1=$(echo "$res1" | cut -d'|' -f3)
-
-    echo -e " 💤 正在执行冷冻休眠 ${C_GRAY}3 秒${C_RESET}，清空链路残留缓存缓冲区，规避瞬时误差..."
-    sleep 3
-
-    echo -e " ⏳ [Round 2/2] 正在拉起第二轮单/多线程分布式套接字盘查..."
-    local res2; res2=$(_execute_speed_probe_raw)
-    local s2=$(echo "$res2" | cut -d'|' -f1 | grep -oE '[0-9.]+\b' | head -n 1)
-    local m2=$(echo "$res2" | cut -d'|' -f2 | grep -oE '[0-9.]+\b' | head -n 1)
-    local r2=$(echo "$res2" | cut -d'|' -f3)
-
-    # 数据科学求两轮平均绝对值
-    local s_avg; s_avg=$(awk -v a="$s1" -v b="$s2" 'BEGIN {printf "%.2f", (a+b)/2}')
-    local m_avg; m_avg=$(awk -v a="$m1" -v b="$m2" 'BEGIN {printf "%.2f", (a+b)/2}')
-    local r_avg; r_avg=$(awk -v a="$r1" -v b="$r2" 'BEGIN {printf "%.3f", (a+b)/2}')
-
-    echo "$s_avg|$m_avg|$r_avg|$s1|$s2|$m1|$m2"
-}
-
 _execute_speed_probe_raw() {
     local test_url="http://cachefly.cachefly.net/10mb.test"
     local wget_output; wget_output=$(wget -4 --no-check-certificate --timeout=6 --tries=1 -O /dev/null "$test_url" 2>&1)
@@ -116,9 +91,8 @@ _execute_speed_probe_raw() {
     echo "$s_speed|$m_speed|$rtt_avg"
 }
 
-# 实体物理注入函数（封装多轨参数）
 _inject_matrix_values() {
-    local mode=$1 # 1:网速 2:延迟 3:稳定 4:综合
+    local mode=$1 
     local custom_val=$2
     local final_bytes=67108864
 
@@ -126,10 +100,10 @@ _inject_matrix_values() {
         final_bytes=$(awk -v m="$custom_val" 'BEGIN {print m * 1024 * 1024}')
     else
         case $mode in
-            1) final_bytes=67108864 ;;  # 网速优先：64MB 极限缓冲大坝
-            2) final_bytes=16777216 ;;  # 延迟优先：16MB 紧凑低延迟滑窗，规避Bufferbloat
-            3) final_bytes=33554432 ;;  # 稳定优先：32MB 黄金中庸值，阻断大幅上下跳动
-            4) final_bytes=50331648 ;;  # 综合考虑：48MB 兼顾高速率与抗丢包，最佳中继
+            1) final_bytes=67108864 ;;  
+            2) final_bytes=16777216 ;;  
+            3) final_bytes=33554432 ;;  
+            4) final_bytes=50331648 ;;  
         esac
     fi
     local final_default_bytes=$(awk -v b="$final_bytes" 'BEGIN {print int(b / 64)}')
@@ -158,16 +132,26 @@ _inject_matrix_values() {
 }
 
 # =========================================================
-#             🛠️ 二级控制台：核心功能交互流重构
+#             🛠️ 二级控制台：核心功能功能块
 # =========================================================
 
-# 20-1. 提升单线程速率专项面板
+# 1. 提升单线程速率面板（双轮暗测）
 optimize_single_thread_panel() {
     clear
-    echo -e "${C_CYAN}⏳ 正在启动提升单线程速率专项 A/B 双轮暗测，请耐心等待验证系统画像...${C_RESET}"
-    local old_res; old_res=$(_execute_speed_probe_double_wheel)
-    local os_avg=$(echo "$old_res" | cut -d'|' -f1); local om_avg=$(echo "$old_res" | cut -d'|' -f2); local or_avg=$(echo "$old_res" | cut -d'|' -f3)
-    local os1=$(echo "$old_res" | cut -d'|' -f4); local os2=$(echo "$old_res" | cut -d'|' -f5)
+    echo -e "${C_CYAN}⏳ 正在启动提升单线程速率专项 A/B 双轮测试，正在采集初始样本...${C_RESET}"
+    echo -e " ⏳ [Round 1/2] 第一轮测试中..."
+    local res1; res1=$(_execute_speed_probe_raw)
+    local s1=$(echo "$res1" | cut -d'|' -f1); local m1=$(echo "$res1" | cut -d'|' -f2); local r1=$(echo "$res1" | cut -d'|' -f3)
+    
+    echo -e " 休眠3秒........"
+    sleep 3
+    
+    echo -e " ⏳ [Round 2/2] 第二轮测试中..."
+    local res2; res2=$(_execute_speed_probe_raw)
+    local s2=$(echo "$res2" | cut -d'|' -f1); local m2=$(echo "$res2" | cut -d'|' -f2); local r2=$(echo "$res2" | cut -d'|' -f3)
+    
+    local os_avg=$(awk -v a="$s1" -v b="$s2" 'BEGIN {printf "%.2f", (a+b)/2}')
+    local or_avg=$(awk -v a="$r1" -v b="$r2" 'BEGIN {printf "%.3f", (a+b)/2}')
 
     clear
     echo "========================================================="
@@ -176,10 +160,10 @@ optimize_single_thread_panel() {
     echo -e " 💡 ${C_YELLOW}【多轨网络性能专家自适应选型推演】${C_RESET}:"
     echo -e "    由于当前公网到美西长途物理时延固定在 ${or_avg} ms 上下，要实现持续不卡顿的高速单线程突围，内核优化方向需解决多核心软中断拥堵与滑动窗口硬上限限制。调优目标冲突时可分以下多轨决策："
     echo -e ""
-    echo -e "    ${C_GREEN}[ 1 ] 网速吞吐优先预设${C_RESET}  ──► 建议值: ${C_GREEN}64 MB${C_RESET} (倾泻蛮力，压榨单线程最大绝对速度峰值)"
-    echo -e "    ${C_GREEN}[ 2 ] 延迟极速优先预设${C_RESET}  ──► 建议值: ${C_GREEN}16 MB${C_RESET} (将滑窗卡在低水位，防缓冲区膨胀引发时延飙升)"
-    echo -e "    ${C_GREEN}[ 3 ] 持续稳定优先预设${C_RESET}  ──► 建议值: ${C_GREEN}30 MB${C_RESET} (锁定黄金滑窗大小，消除晚高峰网速上下激烈跳动)"
-    echo -e "    ${C_GREEN}[ 4 ] 综合考虑出厂策略${C_RESET}  ──► 建议值: ${C_GREEN}48 MB${C_RESET} (💥 代理首选！兼顾长途持续高速与极致稳定性)"
+    echo -e "    ${C_GREEN}[ 1 ] 网速吞吐优先预设${C_RESET}  ──► 建议缓冲: 64 MB (倾泻蛮力，压榨单线程最大绝对速度峰值)"
+    echo -e "    ${C_GREEN}[ 2 ] 延迟极速优先预设${C_RESET}  ──► 建议缓冲: 16 MB (卡紧水位，消灭Bufferbloat排队延时)"
+    echo -e "    ${C_GREEN}[ 3 ] 持续稳定优先预设${C_RESET}  ──► 建议缓冲: 30 MB (锁定黄金滑窗大小，消除晚高峰网速上下激烈跳动)"
+    echo -e "    ${C_GREEN}[ 4 ] 综合考虑出厂策略${C_RESET}  ──► 建议缓冲: 48 MB (💥 代理首选！又快又稳，长途高吞吐最优解)"
     echo "========================================================="
     read -p " 🤔 请精准输入您期望应用的轨道序号 [1-4] (直接回车默认采用 4 综合考虑): " TRACK_CHOOSE
     [ -z "$TRACK_CHOOSE" ] && TRACK_CHOOSE="4"
@@ -187,11 +171,21 @@ optimize_single_thread_panel() {
     echo -e "\n⏳ 正在针对性注入策略参数进行底层内核热重载..."
     _inject_matrix_values "$TRACK_CHOOSE" ""
     
-    echo -e "⏳ 正在拉起【优化后】物理上轨第二轮双轮暗测，中场休息 2 秒..."
+    echo -e "⏳ 正在拉起【优化后】物理上轨第二轮双轮测试，中场休息 2 秒..."
     sleep 2
-    local new_res; new_res=$(_execute_speed_probe_double_wheel)
-    local ns_avg=$(echo "$new_res" | cut -d'|' -f1); local nm_avg=$(echo "$new_res" | cut -d'|' -f2); local nr_avg=$(echo "$new_res" | cut -d'|' -f3)
-    local ns1=$(echo "$new_res" | cut -d'|' -f4); local ns2=$(echo "$new_res" | cut -d'|' -f5)
+    echo -e " ⏳ [Round 1/2] 优化后第一轮测试中..."
+    local n_res1; n_res1=$(_execute_speed_probe_raw)
+    local ns1=$(echo "$n_res1" | cut -d'|' -f1); local nm1=$(echo "$n_res1" | cut -d'|' -f2); local nr1=$(echo "$n_res1" | cut -d'|' -f3)
+    
+    echo -e " 休眠3秒........"
+    sleep 3
+    
+    echo -e " ⏳ [Round 2/2] 优化后第二轮测试中..."
+    local n_res2; n_res2=$(_execute_speed_probe_raw)
+    local ns2=$(echo "$n_res2" | cut -d'|' -f1); local nm2=$(echo "$n_res2" | cut -d'|' -f2); local nr2=$(echo "$n_res2" | cut -d'|' -f3)
+    
+    local ns_avg=$(awk -v a="$ns1" -v b="$ns2" 'BEGIN {printf "%.2f", (a+b)/2}')
+    local nr_avg=$(awk -v a="$nr1" -v b="$nr2" 'BEGIN {printf "%.3f", (a+b)/2}')
 
     clear
     echo "========================================================="
@@ -199,14 +193,14 @@ optimize_single_thread_panel() {
     echo "========================================================="
     printf " %-22s | %-18s | %-18s\n" "单线程深度监控指标" "调优前 (历史均值)" "调优后 (当前均值)"
     echo "========================================================="
-    printf " • 第一轮单线程绝对值 | %-18s | %-18s\n" "${os1} MB/s" "${ns1} MB/s"
-    printf " • 第二轮单线程绝对值 | %-18s | %-18s\n" "${os2} MB/s" "${ns2} MB/s"
+    printf " • 第一轮单线程绝对值 | %-18s | %-18s\n" "${s1} MB/s" "${ns1} MB/s"
+    printf " • 第二轮单线程绝对值 | %-18s | %-18s\n" "${s2} MB/s" "${ns2} MB/s"
     echo "--------------------------------------------------------="
     printf " 🏆 【双轮综合均速】  | ${C_YELLOW}%-14s${C_RESET} | ${C_GREEN}%-14s${C_RESET}\n" "${os_avg} MB/s" "${ns_avg} MB/s"
     printf " ⏱️  【平均物理延迟】  | %-18s | %-18s\n" "${or_avg} ms" "${nr_avg} ms"
     echo "========================================================="
-    echo -e "  ${C_GREEN}1)${C_RESET} 🟢 确认应用此项优化，并固化内核配置"
-    echo -e "  ${C_GREEN}2)${C_RESET} 🛑 放弃本次单线程优化，回滚原历史备份"
+    echo -e "  1) 应用优化参数"
+    echo -e "  2) 放弃优化并恢复"
     echo "========================================================="
     read -p "请输入决策编号: " DEC_OPT
     if [ "$DEC_OPT" == "2" ]; then
@@ -217,7 +211,7 @@ optimize_single_thread_panel() {
     fi
 }
 
-# 20-2. 单/多线程同步突围深度交互循环面板 (锁死在此，只有选0才返回)
+# 2. 单/多线程同步突围肉搏子面板 (锁死不退回主菜单)
 menu_sync_breakthrough_panel() {
     while true; do
         clear
@@ -229,13 +223,13 @@ menu_sync_breakthrough_panel() {
         echo "========================================================="
         echo -e "🖥️  ${C_BLUE}[单/多线程同步突围矩阵 ──► 细分肉搏管理中心]${C_RESET}"
         echo "========================================================="
-        echo -e " 当前物理内核运行指标: CC=[${C_CYAN}$cc_now${C_RESET}] QDISC=[${C_CYAN}$qd_now${C_RESET}] 缓冲大坝=[${C_GREEN}${rm_now_mb} MB${C_RESET}]"
+        echo -e " 当前运行状态: CC=[${C_CYAN}$cc_now${C_RESET}] QDISC=[${C_CYAN}$qd_now${C_RESET}] 缓冲大坝=[${C_GREEN}${rm_now_mb} MB${C_RESET}]"
         echo "========================================================="
-        echo -e " ${C_GREEN}1)${C_RESET} 压榨内核大套接字缓冲区"
-        echo -e " ${C_GREEN}2)${C_RESET} 禁止空闲连接窗口回落"
-        echo -e " ${C_GREEN}3)${C_RESET} 自适应纠偏封锁跨境丢包"
-        echo -e " ${C_GREEN}4)${C_RESET} 🚀 自动优化 (联动合并注入1,2,3项，含双轮前后对比审计与多轨选型)"
-        echo -e " ${C_GREEN}5)${C_RESET} 🔄 🔄 原地再次测速 (实时核验调优物理反馈)"
+        echo -e " 1) 压榨内核大套接字缓冲区"
+        echo " 2) 禁止空闲连接窗口回落"
+        echo " 3) 自适应纠偏封锁跨境丢包"
+        echo " 4) 全部应用123"
+        echo " 5) 再次测速"
         echo " 0) 返回上级菜单"
         echo "========================================================="
         read -p "请精准抉择您要注入的序号: " SUB_OPT
@@ -246,7 +240,7 @@ menu_sync_breakthrough_panel() {
             1)
                 clear
                 local total_mem_kb; total_mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-                local rec_mb=64; [ $total_mem_kb -l 1050000 ] && rec_mb=16
+                local rec_mb=64; [ $total_mem_kb -lt 1050000 ] && rec_mb=16
                 echo "========================================================="
                 echo -e "📋 ${C_CYAN}[ 选项 1 ──► 压榨内核大套接字缓冲区硬核风险决断 ]${C_RESET}"
                 echo "========================================================="
@@ -312,40 +306,49 @@ menu_sync_breakthrough_panel() {
                     sed -i '/net.ipv4.tcp_ecn/d' "$SYS_FILE"
                     echo "net.ipv4.tcp_ecn = 2" >> "$SYS_FILE"
                     sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-                    echo -e "${C_GREEN}✅ 方案 3 物理注入成功：tcp_ecn 自适应对齐降噪已锁定生效！${C_RESET}"
+                    echo -e "${C_GREEN}✅ 方案 3 物理注入成功：tcp_ecn 已精准纠偏为 2 自适应防御！${C_RESET}"
                 fi; read -p "按回车继续..." temp
                 ;;
             4)
-                # 选项 4：自动优化联动合并注入 (带双轮对比和多轨选型交互)
                 clear
-                echo -e "${C_CYAN}⏳ 正在启动全部应用自动化调优 A/B 双轮暗测，正在采集调优前样本数据...${C_RESET}"
-                local old_res; old_res=$(_execute_speed_probe_double_wheel)
-                local os_avg=$(old_res | cut -d'|' -f1); local om_avg=$(old_res | cut -d'|' -f2); local or_avg=$(old_res | cut -d'|' -f3)
-                local os1=$(old_res | cut -d'|' -f4); local os2=$(old_res | cut -d'|' -f5)
-                local om1=$(old_res | cut -d'|' -f6); local om2=$(old_res | cut -d'|' -f7)
+                echo -e "${C_CYAN}⏳ 正在启动全部应用自适应调优 A/B 双轮测试，采集优化前样本...${C_RESET}"
+                echo -e " ⏳ [Round 1/2] 第一轮测试中..."
+                local old1; old1=$(_execute_speed_probe_raw)
+                echo -e " 休眠5秒........"
+                sleep 5
+                echo -e " ⏳ [Round 2/2] 第二轮测试中..."
+                local old2; old2=$(_execute_speed_probe_raw)
+                
+                local os_avg=$(awk -v a="$(echo "$old1" | cut -d'|' -f1)" -v b="$(echo "$old2" | cut -d'|' -f1)" 'BEGIN {printf "%.2f", (a+b)/2}')
+                local om_avg=$(awk -v a="$(echo "$old1" | cut -d'|' -f2)" -v b="$(echo "$old2" | cut -d'|' -f2)" 'BEGIN {printf "%.2f", (a+b)/2}')
+                local or_avg=$(awk -v a="$(echo "$old1" | cut -d'|' -f3)" -v b="$(echo "$old2" | cut -d'|' -f3)" 'BEGIN {printf "%.3f", (a+b)/2}')
 
                 clear
                 echo "========================================================="
                 echo -e "🚀 ${C_CYAN}[全部联动策略注入 ──► 多轨优化分流控制中心]${C_RESET}"
                 echo "========================================================="
                 echo -e " 💡 调优冲突决断：当极限吞吐与延迟稳定性发生冲突时，请做出技术倾向选型："
-                echo -e "    ${C_GREEN}[ 1 ] 网速吞吐优先预设${C_RESET}  ──► 建议缓冲: 64 MB (压榨最高网速绝对上限)"
-                echo -e "    ${C_GREEN}[ 2 ] 延迟极速优先预设${C_RESET}  ──► 建议缓冲: 16 MB (卡紧水位，消灭Bufferbloat排队延时)"
-                echo -e "    ${C_GREEN}[ 3 ] 持续稳定优先预设${C_RESET}  ──► 建议缓冲: 30 MB (锁定中水位，拦截大波动跳动)"
-                echo -e "    ${C_GREEN}[ 4 ] 综合考虑出厂策略${C_RESET}  ──► 建议缓冲: 48 MB (💥 代理首选！又快又稳，长途高吞吐最优解)"
+                echo -e "    [ 1 ] 网速吞吐优先预设  ──► 建议缓冲: 64 MB (压榨最高网速绝对上限)"
+                echo -e "    [ 2 ] 延迟极速优先预设  ──► 建议缓冲: 16 MB (卡紧水位，消灭Bufferbloat排队延时)"
+                echo -e "    [ 3 ] 持续稳定优先预设  ──► 建议缓冲: 30 MB (锁定中水位，拦截大波动跳动)"
+                echo -e "    [ 4 ] 综合考虑出厂策略  ──► 建议缓冲: 48 MB (💥 代理首选！又快又稳，长途高吞吐最优解)"
                 echo "========================================================="
                 read -p " 🤔 请精准注入您期望应用的轨道序号 [1-4] (直接回车默认采用 4 综合考虑): " AUTO_TRACK
                 [ -z "$AUTO_TRACK" ] && AUTO_TRACK="4"
 
-                echo -e "\n⏳ 正在全量并联执行 1,2,3 项及大并发大坝队列（somaxconn 32768）深度加固..."
                 _inject_matrix_values "$AUTO_TRACK" ""
+                
+                echo -e "\n⏳ 正在拉起全量优化上轨后的第二轮双轮验证测试..."
+                echo -e " ⏳ [Round 1/2] 优化后第一轮测试中..."
+                local new1; new1=$(_execute_speed_probe_raw)
+                echo -e " 休眠5秒........"
+                sleep 5
+                echo -e " ⏳ [Round 2/2] 优化后第二轮测试中..."
+                local new2; new2=$(_execute_speed_probe_raw)
 
-                echo -e "⏳ 正在拉起全量优化上轨后的第二轮双轮暗测，中场休息 2 秒..."
-                sleep 2
-                local new_res; new_res=$(_execute_speed_probe_double_wheel)
-                local ns_avg=$(echo "$new_res" | cut -d'|' -f1); local nm_avg=$(echo "$new_res" | cut -d'|' -f2); local nr_avg=$(echo "$new_res" | cut -d'|' -f3)
-                local ns1=$(echo "$new_res" | cut -d'|' -f4); local ns2=$(echo "$new_res" | cut -d'|' -f5)
-                local nm1=$(echo "$new_res" | cut -d'|' -f6); local nm2=$(echo "$new_res" | cut -d'|' -f7)
+                local ns_avg=$(awk -v a="$(echo "$new1" | cut -d'|' -f1)" -v b="$(echo "$new2" | cut -d'|' -f1)" 'BEGIN {printf "%.2f", (a+b)/2}')
+                local nm_avg=$(awk -v a="$(echo "$new1" | cut -d'|' -f2)" -v b="$(echo "$new2" | cut -d'|' -f2)" 'BEGIN {printf "%.2f", (a+b)/2}')
+                local nr_avg=$(awk -v a="$(echo "$new1" | cut -d'|' -f3)" -v b="$(echo "$new2" | cut -d'|' -f3)" 'BEGIN {printf "%.3f", (a+b)/2}')
 
                 clear
                 echo "========================================================="
@@ -353,83 +356,104 @@ menu_sync_breakthrough_panel() {
                 echo "========================================================="
                 printf " %-22s | %-18s | %-18s\n" "系统网络高并发核心指标" "调优前 (历史均值)" "调优后 (当前均值)"
                 echo "========================================================="
-                printf " • 第一轮 单线程 / 多线程 | %-7s / %-7s | %-7s / %-7s\n" "${os1}" "${om1}" "${ns1}" "${nm1}"
-                printf " • 第二轮 单线程 / 多线程 | %-7s / %-7s | %-7s / %-7s\n" "${os2}" "${om2}" "${ns2}" "${nm2}"
-                echo "--------------------------------------------------------="
-                printf " 🏆 【单线程双轮均速】    | ${C_YELLOW}%-14s${C_RESET} | ${C_GREEN}%-14s${C_RESET}\n" "${os_avg} MB/s" "${ns_avg} MB/s"
-                printf " 🚀 【多线程极限带宽】    | ${C_YELLOW}%-14s${C_RESET} | ${C_GREEN}%-14s${C_RESET}\n" "${om_avg} MB/s" "${nm_avg} MB/s"
-                printf " ⏱️  【跨境骨干物理延迟】  | %-18s | %-18s\n" "${or_avg} ms" "${nr_avg} ms"
+                printf " • 🏆 【单线程双轮均速】    | ${C_YELLOW}%-14s${C_RESET} | ${C_GREEN}%-14s${C_RESET}\n" "${os_avg} MB/s" "${ns_avg} MB/s"
+                printf " • 🚀 【多线程极限带宽】    | ${C_YELLOW}%-14s${C_RESET} | ${C_GREEN}%-14s${C_RESET}\n" "${om_avg} MB/s" "${nm_avg} MB/s"
+                printf " • ⏱️  【跨境骨干物理延迟】  | %-18s | %-18s\n" "${or_avg} ms" "${nr_avg} ms"
                 echo "========================================================="
-                echo -e "  ${C_GREEN}1)${C_RESET} 🟢 效果卓越，应用此套工业级联动优化组合拳"
-                echo -e "  ${C_GREEN}2)${C_RESET} 🛑 速度未达预期，放弃优化，原路完整回回退"
+                echo -e "  1) 确认应用策略  2) 放弃优化并完整回退"
                 echo "========================================================="
                 read -p "请输入决策编号: " AUTO_DEC
-                if [ "$DEC_OPT" == "2" ] || [ "$AUTO_DEC" == "2" ]; then
+                if [ "$AUTO_DEC" == "2" ]; then
                     cp "$BAK_FILE" "$SYS_FILE" && sysctl -p /etc/sysctl.conf >/dev/null 2>&1
                     echo -e "${C_YELLOW}🛑 已完好无损安全回滚。${C_RESET}"; sleep 1.5
                 else
-                    echo -e "${C_GREEN}🎉 恭喜！你的代理机器已进化为高并发自适应完全体状态！${C_RESET}"; sleep 2
+                    echo -e "${C_GREEN}🎉 联动参数锁定成功！${C_RESET}"; sleep 1.5
                 fi
                 ;;
             5)
-                # 选项 5：原地双轮测速
-                clear
-                echo -e "${C_CYAN}⏳ 正在执行原地双轮联动测速，实时捕捉内核协议栈微观物理反馈...${C_RESET}"
-                local check_res; check_res=$(_execute_speed_probe_double_wheel)
-                s_rate="$(echo "$check_res" | cut -d'|' -f1) MB/s"
-                m_rate="$(echo "$check_res" | cut -d'|' -f2) MB/s"
-                rtt_ms="$(echo "$check_res" | cut -d'|' -f3)"
+                # 原地再次测速项
+                break
                 ;;
         esac
     done
 }
 
+# =========================================================
+#                    ⚙️ 独立闭环自适应双轮测试大盘
+# =========================================================
 run_multi_dim_speedtest() {
-    # 物理升轨：主干测速直接升级为双轮交叉平均采样，拦截晚高峰误差
-    clear
-    echo -e "${C_CYAN}⏳ 正在拉起 [双轮自适应平均测速引擎]，提取公网纯净物理均值...${C_RESET}"
-    echo -e " 📍 节点位置: ${C_YELLOW}全球 Anycast 边缘分发集群 (亚太/核心骨干网)${C_RESET}"
-    echo -e " 🌐 测试网型: ${C_GRAY}http://cachefly.cachefly.net/10mb.test${C_RESET}"
-    echo -e "${LINE_GRAY}"
-    local main_res; main_res=$(_execute_speed_probe_double_wheel)
-    
-    local s_avg=$(echo "$main_res" | cut -d'|' -f1)
-    local m_avg=$(echo "$main_res" | cut -d'|' -f2)
-    local r_avg=$(echo "$main_res" | cut -d'|' -f3)
-
     while true; do
         clear
-        echo -e "${C_BLUE}⚡ tcpt吞吐量测速看板 (单/多线程同步突围矩阵)${C_RESET}"
+        echo -e "${C_CYAN}⏳ 正在启动分布式双轮全向交叉监测大盘，阻断一切瞬时误差...${C_RESET}"
         echo -e "${LINE_GRAY}"
-        echo -e " 📊 单线程物理净吞吐速率:   (双轮均速) ${C_GREEN}${s_avg} MB/s${C_RESET}"
-        echo -e " 🚀 多线程高并发极限带宽:   (双轮均速) ${C_GREEN}${m_avg} MB/s${C_RESET}"
-        echo -e " 🛰️  当前跨境骨干物理延迟:   (绝对均速) ${C_YELLOW}${r_avg} ms${C_RESET}"
-        echo -e "${LINE_GRAY}"
-        echo -e " ${C_GREEN}1)${C_RESET} 提升单线程速率 (含稳定性提升多轨策略、双轮对比审计面板)"
-        echo -e " ${C_GREEN}2)${C_RESET} 单 / 多线程同步突围 (💥 深入单项肉搏调优交互菜单)"
-        echo -e " ${C_GREEN}3)${C_RESET} 🔄 原地再次启动双轮精确测速"
-        echo -e " 0) 放弃并返回上级主菜单"
-        echo -e "${LINE_GRAY}"
-        read -p "请精准抉择您要注入的序号: " MAIN_INNER_OPT
         
-        if [ -z "$MAIN_INNER_OPT" ] || [ "$MAIN_INNER_OPT" == "0" ]; then break; fi
+        echo -e " ⏳ 第一轮测试中..."
+        local r1; r1=$(_execute_speed_probe_raw)
+        local s1=$(echo "$r1" | cut -d'|' -f1); local m1=$(echo "$r1" | cut -d'|' -f2); local rtt1=$(echo "$r1" | cut -d'|' -f3)
         
-        if [ "$MAIN_INNER_OPT" == "1" ]; then
-            optimize_single_thread_panel
-        elif [ "$MAIN_INNER_OPT" == "2" ]; then
-            menu_sync_breakthrough_panel
-        elif [ "$MAIN_INNER_OPT" == "3" ]; then
-            clear
-            echo -e "${C_CYAN}⏳ 正在重新执行双轮对齐测速...${C_RESET}"
-            local re_res; re_res=$(_execute_speed_probe_double_wheel)
-            s_avg=$(echo "$re_res" | cut -d'|' -f1)
-            m_avg=$(echo "$re_res" | cut -d'|' -f2)
-            r_avg=$(echo "$re_res" | cut -d'|' -f3)
-        fi
+        echo -e "${LINE_GRAY}"
+        echo -e "📊 第一轮测试"
+        echo -e " 📊 单线程物理净吞吐速率:   (公网直连) ${s1} MB/s"
+        echo -e " 🚀 多线程高并发极限带宽:   (并发压榨) ${m1} MB/s"
+        echo -e " 🛰️  当前跨境骨干物理延迟:   ${rtt1} ms"
+        echo -e "${LINE_GRAY}"
+        
+        echo -e " 休眠5秒........"
+        sleep 5
+        
+        echo -e "\n ⏳ 第二轮测试中..."
+        local r2; r2=$(_execute_speed_probe_raw)
+        local s2=$(echo "$r2" | cut -d'|' -f1); local m2=$(echo "$r2" | cut -d'|' -f2); local rtt2=$(echo "$r2" | cut -d'|' -f3)
+        
+        echo -e "${LINE_GRAY}"
+        echo -e "📊 第二轮测试"
+        echo -e " 📊 单线程物理净吞吐速率:   (公网直连) ${s2} MB/s"
+        echo -e " 🚀 多线程高并发极限带宽:   (并发压榨) ${m2} MB/s"
+        echo -e " 🛰️  当前跨境骨干物理延迟:   ${rtt2} ms"
+        
+        while true; do
+            echo -e "${LINE_GRAY}"
+            echo -e " 1) 提升单线程速率"
+            echo -e " 2) 单 / 多线程同步突围"
+            echo -e " 3) 🔄 再次测速"
+            echo -e " 0) 放弃并返回上级主菜单"
+            echo -e "${LINE_GRAY}"
+            read -p "请精准抉择您要注入的序号: " MAIN_INNER_OPT
+            
+            if [ -z "$MAIN_INNER_OPT" ] || [ "$MAIN_INNER_OPT" == "0" ]; then 
+                return 2
+            fi
+            
+            if [ "$MAIN_INNER_OPT" == "1" ]; then
+                optimize_single_thread_panel
+                break # 触发外层循环重测，核验最终物理反馈
+            elif [ "$MAIN_INNER_OPT" == "2" ]; then
+                menu_sync_breakthrough_panel
+                break # 肉搏子菜单调整完或点了再次测速，直接跳回外层重新洗牌测速
+            elif [ "$MAIN_INNER_OPT" == "3" ]; then
+                break # 直接击穿本层，重卷第一轮和第二轮
+            else
+                echo -e "${C_RED}❌ 无效选项${C_RESET}"; sleep 1
+            fi
+        done
     done
 }
 
-# 1. 📂 主面板及系统交叉审计引擎
+run_telegram_spec_test() {
+    echo -e "⏳ 正在连通 Telegram 全球核心骨干机房进行时延与丢包率交叉监测..."
+    local dc1_ip="149.154.175.50"; local dc2_ip="149.154.167.51"; local dc5_ip="91.108.56.110"
+    test_ping() {
+        local ip=$1; local res; res=$(ping -c 4 -W 2 "$ip" 2>/dev/null)
+        if [ $? -ne 0 ] || [ -z "$res" ]; then echo -e "${C_RED}❌ 物理断流 (超时/阻断)${C_RESET}"; else
+            local loss; loss=$(echo "$res" | grep -oP '\d+(?=% packet loss)'); local avg_time; avg_time=$(echo "$res" | tail -n 1 | awk -F '/' '{print $5}')
+            echo -e "${C_GREEN}${avg_time} ms${C_RESET} (丢包率: ${C_YELLOW}${loss}%${C_RESET})"; fi
+    }
+    echo -e "${LINE_GRAY}"
+    echo -n " 🌐 Telegram DC1 [北美-迈阿密]:   " && test_ping "$dc1_ip"
+    echo -n " 🌐 Telegram DC2 [欧洲-阿姆]:     " && test_ping "$dc2_ip"
+    echo -n " 🌐 Telegram DC5 [亚洲-新加坡]:   " && test_ping "$dc5_ip"
+}
+
 adaptive_tcp_tuning() {
     clear
     echo -e "${C_BLUE}🛰️  正在启动全向自适应通用网络探针，深入盘查宿主机物理现状...${C_RESET}"
