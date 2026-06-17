@@ -63,15 +63,16 @@ check_acme_env() {
     fi
 }
 
-# 20) 基础系统初始化运维专属菜单
+# 20) 基础系统初始化运维专属菜单 (完全重构版)
 menu_system_initialization() {
     while true; do
         clear
-        echo -e "${C_BLUE}⚡ 基础系统初始化运维调控中心${C_RESET}"
+        echo -e "${C_BLUE}⚡ 系统信息工具${C_RESET}"
+        echo -e "日期: $(date "+%Y-%m-%d %H:%M:%S")"
         echo -e "${LINE_GRAY}"
-        echo -e "1) 常用核心开发运维工具检测与部署"
-        echo -e "2) 交互式系统主机名安全合规改写"
-        echo -e "3) 一键强行对齐至标准网络北京时间 (CST)"
+        echo -e "1) 基础工具安装"
+        echo -e "2) 改主机名"
+        echo -e "3) 应用北京时间"
         echo -e "0) 返回上一层菜单"
         echo -e "${LINE_GRAY}"
         read -p "请注入系统子项操作编号: " SYS_OPT
@@ -167,15 +168,15 @@ menu_system_initialization() {
             done
             
             echo -e "${C_CYAN}⏳ 正在物理锁死系统内核主机名并改写网络本地域名映射拓扑...${C_RESET}"
-            sudo hostnamectl set-hostname "$NEW_HOSTNAME"
             
-            # 安全删除旧的回路映射，防止污染冲突
+            # 【核心报错修复点】: 必须先在内核知道切换动作前，将 IP 解析注入到本地 hosts，完全避开 sudo 报错警告
             sudo sed -i "/127.0.0.1/s/\b$NEW_HOSTNAME\b//g" /etc/hosts
             sudo sed -i "/::1/s/\b$NEW_HOSTNAME\b//g" /etc/hosts
-            
-            # 追加纯净的基础映射绑定
             echo "127.0.0.1 $NEW_HOSTNAME" | sudo tee -a /etc/hosts > /dev/null
             echo "::1 $NEW_HOSTNAME" | sudo tee -a /etc/hosts > /dev/null
+            
+            # 此时再修改内核主机名，后续执行任何 sudo 命令都拥有完整的就绪映射环境
+            sudo hostnamectl set-hostname "$NEW_HOSTNAME"
             
             echo -e "${C_GREEN}✅ 物理改写生效，以下为当前最新 /etc/hosts 局部拓扑截面：${C_RESET}"
             tail -n 5 /etc/hosts
