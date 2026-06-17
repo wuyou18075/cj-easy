@@ -12,7 +12,7 @@
 > 包含系统状态盘查、原生 Nginx 自动化安装、多分组反向代理管理（支持底层四层 TCP 盲测健康监测）、acme.sh 证书申请与定时自动续签维护。
 
 ```bash
-bash <(curl -fsSL "[https://raw.githubusercontent.com/wuyou18075/cj-easy/main/install.sh?v=$](https://raw.githubusercontent.com/wuyou18075/cj-easy/main/install.sh?v=$)(date +%s)")
+bash <(curl -fsSL "https://raw.githubusercontent.com/wuyou18075/cj-easy/main/install.sh?v=$(date +%s)")
 ```
 ### 2️⃣ TCP 内核与网卡级深度优化调优
 >包含全球 Anycast 边缘分发节点双向测速推演、BDP 满血硬件级套接字缓冲（rmem/wmem）压榨、新旧配置并行交叉审计、多选/全选智控注入、网卡层 MTU 黄金标准（1500）降轨纠偏以及 Fq vs Cake 真实网络双雄竞技场实测。
