@@ -206,6 +206,7 @@ refresh_dashboard() {
     echo "  [5] 快速调整 节点数据轮询频率"
     echo "  [6] 进入高级 监控分析与路由断点诊断"
     echo "  [7] 查看当前面板各组件服务路径与文件分布"
+    echo "  [8] 🔄 一键在线拉取最新代码并热更新面板服务"
     echo "  [9] 唤醒 TG 连通性测试并发送验证消息 (支持原地自愈绑定)"
     echo "  [0] Security Exit"
     echo "====================================================================="
@@ -222,6 +223,7 @@ main_menu() {
         5) adjust_freq ;;
         6) menu_monitor ;;
         7) view_paths ;;
+        8) update_panel ;;
         9) wake_tg_connection ;;
         0) exit 0 ;;
         *) main_menu ;;
@@ -456,6 +458,41 @@ view_paths() {
     echo "====================================================================="
     read -p "按回车返回主菜单..."
     main_menu
+}
+
+update_panel() {
+    clear
+    echo "====================================================================="
+    echo "      🔄  正在从 GitHub 在线拉取最新代码并执行热更新"
+    echo "====================================================================="
+    echo "🌐 正在连接 GitHub 获取最新脚本..."
+    local SCRIPT_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/vps-tg-bot-install.sh"
+    local TMP_SH="/tmp/vps-tg-bot-update.sh"
+    
+    # 强制拉取避免缓存
+    curl -fsSL "${SCRIPT_URL}?v=$(date +%s)" -o "$TMP_SH"
+    
+    if [ $? -eq 0 ] && [ -s "$TMP_SH" ]; then
+        chmod +x "$TMP_SH"
+        
+        # 覆盖原本的安装脚本
+        cp -f "$TMP_SH" "${CONFIG_DIR}/test.sh" 2>/dev/null
+        cp -f "$TMP_SH" "$0" 2>/dev/null
+        
+        echo "🛑 正在停止旧版本服务..."
+        systemctl stop tg_vps_bot >/dev/null 2>&1
+        kill -9 $(pgrep -f "python3 ${PYTHON_SCRIPT}") >/dev/null 2>&1
+        
+        echo "✅ 新脚本拉取完毕，正在无缝重载并更新 Python 核心引擎..."
+        sleep 2
+        
+        # 使用 exec 彻底替换当前 Bash 进程，并带上参数直接触发静默热更新
+        exec bash "${CONFIG_DIR}/test.sh" --auto-update
+    else
+        echo "❌ 拉取失败，请检查与 GitHub 的网络连通性！"
+        read -p "按回车键返回主菜单..."
+        main_menu
+    fi
 }
 
 wake_tg_connection() {
@@ -708,7 +745,6 @@ def run_bot():
 
     async def start(u, c):
         conf = load_conf()
-        # 把前面的点去掉了，TG自动识别斜杠为可点击命令
         m = f"🛡️ 专属集群管理就绪 ({conf['VPS_NAME']})\n\n/status - 实时快照与国内外多节点测速\n/report - 提取运维日报\n/toggle - 翻转日报开启状态\n/ping - 安徽三网骨干链路诊断\n/node - 提取节点配置"
         await u.message.reply_text(m)
 
@@ -744,8 +780,7 @@ def run_bot():
         else:
             with open(f_p, "r", encoding="utf-8", errors="ignore") as f: txt = f.read().strip()
             if not txt: await u.message.reply_text("ℹ️ 节点配置文件为空。")
-            else: await u.message.reply_text(f"```text\n{txt}\n
-```", parse_mode="Markdown")
+            else: await u.message.reply_text(f"```text\n{txt}\n```", parse_mode="Markdown")
 
     conf = load_conf()
     app = Application.builder().token(conf["BOT_TOKEN"]).build()
@@ -768,4 +803,14 @@ EOF_PY
 
 check_depends
 init_config
+
+# 拦截热更新传递的系统参数 (实现代码热覆盖与无缝重载)
+if [ "$1" == "--auto-update" ]; then
+    echo "🔄 正在为您重写核心引擎并重启底层守护服务..."
+    write_python_engine
+    restart_backend_service
+    echo "🎉 核心服务热重载完成！已顺利过渡到最新版本！"
+    sleep 2
+fi
+
 main_menu
