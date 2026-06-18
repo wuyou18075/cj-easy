@@ -33,6 +33,6 @@ bash <(curl -fsSL "https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/hea
 >提供无伤拔除旧残留、一键快速部署、容器依赖加固与生命周期智控管理。
 
 ```bash
-bash <(curl -fsSL "https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/vps-tg-install.sh?v=$(date +%s)")
+bash <(curl -fsSL "https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/vps-tg-bot-install.sh?v=$(date +%s)")
 
 ```
