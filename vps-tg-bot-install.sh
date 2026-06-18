@@ -53,7 +53,7 @@ except:
     python3 -c "
 import requests
 try:
-    r = requests.get('https://api.telegram.org', timeout=4)
+    r = requests.get('[https://api.telegram.org](https://api.telegram.org)', timeout=4)
     print(f'🟢 畅通 (网络链路无阻断，HTTP 状态码: {r.status_code})')
 except:
     print('🔴 严重堵塞 / 被墙封锁 (连接官方超时)')
@@ -71,7 +71,7 @@ token = sys.argv[1]
 admin_id = sys.argv[2]
 
 try:
-    r = requests.get(f'https://api.telegram.org/bot{token}/getMe', timeout=6)
+    r = requests.get(f'[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/getMe', timeout=6)
     if r.status_code == 401:
         print('❌ Token 验证失败！(HTTP 401) 机器人不存在或注销。')
         sys.exit(2)
@@ -87,7 +87,7 @@ except Exception as e:
     sys.exit(1)
 
 try:
-    url = f'https://api.telegram.org/bot{token}/sendMessage'
+    url = f'[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage'
     payload = {
         'chat_id': admin_id,
         'text': '🔔 *[面板核心链路验证]*\n\n安全通信信道已打通，控制指令交互现已成功激活！',
@@ -121,7 +121,7 @@ check_depends() {
     # 安装 NextTrace (测回程必备)
     if ! command -v nexttrace &> /dev/null; then
         echo "🌐 正在为您安装开源回程探测器 (NextTrace)..."
-        bash <(curl -fsSL https://nxtrace.org/nt) >/dev/null 2>&1
+        bash <(curl -fsSL [https://nxtrace.org/nt](https://nxtrace.org/nt)) >/dev/null 2>&1
     fi
 }
 
@@ -150,6 +150,34 @@ END
 read_json() { python3 -c "import json, sys; print(json.load(open('$CONFIG_FILE')).get(sys.argv[1], ''))" "$1" 2>/dev/null; }
 write_json() { python3 -c "import json, sys; d=json.load(open('$CONFIG_FILE')); v=sys.argv[2]; d[sys.argv[1]]=int(v) if v.isdigit() else v; json.dump(d,open('$CONFIG_FILE','w'),indent=4)" "$1" "$2" 2>/dev/null; }
 
+# === 全量生命周期 TG 消息触达核心 ===
+notify_tg() {
+    local msg_type="$1"
+    python3 - "$msg_type" << 'EOF_NOTIFY'
+import sys, json, requests
+try:
+    with open('/root/tg_vps_bot/config.json', 'r') as f:
+        conf = json.load(f)
+    token = conf.get("BOT_TOKEN")
+    admin_id = conf.get("ADMIN_ID")
+    vps_name = conf.get("VPS_NAME", "Node")
+    msg_type = sys.argv[1]
+    
+    if not token or not admin_id: sys.exit(0)
+    
+    text = ''
+    if msg_type == 'install':
+        text = f'🎉 *[主控安装成功]*\n\n主机 `{vps_name}` 节点已成功部署并上线！\n发送 /start 唤出管理菜单。'
+    elif msg_type == 'uninstall':
+        text = f'🗑️ *[节点卸载通知]*\n\n主机 `{vps_name}` 的主控面板已彻底卸载，江湖再见！'
+    elif msg_type == 'update':
+        text = f'🚀 *[无缝热重载完成]*\n\n主机 `{vps_name}` 已成功拉取最新代码并重启！\n\n🛡️ *专属集群管理就绪*\n\n/status - 提取服务器综合监控大盘\n/speed [节点数] - 触发单线程精细网速诊断\n/mtr [目标IP] - MTR 深度回程解析(带线路备注)\n/trace [目标IP] - 调用 NextTrace 智能测回程\n/report - 提取运维全貌日报\n/toggle - 翻转自动化日报开启状态\n/ping - 提取合肥三网骨干链路延迟\n/node - 提取节点配置文件内容\n/traffic <配额> - 设置本月流量预设(GB)\n/alert <阈值> - 设置流量预警线(百分比)'
+    
+    requests.post(f'[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage', json={'chat_id': admin_id, 'text': text, 'parse_mode': 'Markdown'}, timeout=5)
+except: pass
+EOF_NOTIFY
+}
+
 restart_backend_service() {
     if systemctl is-enabled tg_vps_bot >/dev/null 2>&1; then
         systemctl restart tg_vps_bot >/dev/null 2>&1
@@ -175,7 +203,7 @@ refresh_dashboard() {
 
     local tg_status="🔴 异常"
     if [ -n "$token" ]; then
-        local http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 "https://api.telegram.org/bot${token}/getMe")
+        local http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 "[https://api.telegram.org/bot$](https://api.telegram.org/bot$){token}/getMe")
         if [ "$http_code" -eq 200 ]; then tg_status="🟢 正常"; fi
     fi
 
@@ -353,9 +381,11 @@ END_SYS
                 systemctl disable tg_vps_bot >/dev/null 2>&1
                 restart_backend_service
             fi
+            notify_tg "install"
             echo "🎉 主控端安全部署成功！文件已抱团归拢。"
             read -p "按回车返回菜单..." ;;
         2)
+            notify_tg "uninstall"
             systemctl stop tg_vps_bot >/dev/null 2>&1
             systemctl disable tg_vps_bot >/dev/null 2>&1
             rm -f /etc/systemd/system/tg_vps_bot.service
@@ -482,7 +512,7 @@ update_panel() {
     echo "      🔄  正在从 GitHub 在线拉取最新代码并执行热更新"
     echo "====================================================================="
     echo "🌐 正在连接 GitHub 获取最新脚本..."
-    local SCRIPT_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/vps-tg-bot-install.sh"
+    local SCRIPT_URL="[https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/vps-tg-bot-install.sh](https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/vps-tg-bot-install.sh)"
     local TMP_SH="/tmp/vps-tg-bot-update.sh"
     
     curl -fsSL "${SCRIPT_URL}?v=$(date +%s)" -o "$TMP_SH"
@@ -623,7 +653,7 @@ def traffic_persistent_worker():
                     
                     if alert_month != current_month:
                         txt = f"⚠️ *[超额警告] 流量预警触发！*\n\n您的主机 `{conf['VPS_NAME']}` 当月流量已使用达到 `{pct:.1f}%`\n● 已用/总量: `{used_g:.2f}G / {total_g}G`"
-                        requests.post(f"https://api.telegram.org/bot{conf['BOT_TOKEN']}/sendMessage", data={"chat_id": conf['ADMIN_ID'], "text": txt, "parse_mode": "Markdown"})
+                        requests.post(f"[https://api.telegram.org/bot](https://api.telegram.org/bot){conf['BOT_TOKEN']}/sendMessage", data={"chat_id": conf['ADMIN_ID'], "text": txt, "parse_mode": "Markdown"})
                         c.execute("UPDATE report_counter SET count=? WHERE id=4", (current_month,))
             
             conn.commit()
@@ -631,19 +661,74 @@ def traffic_persistent_worker():
         except: pass
         time.sleep(5)
 
+# === 已完美找回: CPU 守护进程 ===
+def cpu_load_guardian():
+    import psutil
+    high_count = 0
+    while True:
+        try:
+            conf = load_conf()
+            cpu = psutil.cpu_percent(interval=1)
+            if cpu >= conf.get("CPU_HIGH_LOAD_ALERT_PCT", 90): high_count += 1
+            else: high_count = 0
+            if high_count >= 3:
+                txt = f"🔥 *[重大安全警报]*\n\n主机 `{conf['VPS_NAME']}` CPU 连续三次满载死锁 (`{cpu}%`)！"
+                requests.post(f"[https://api.telegram.org/bot](https://api.telegram.org/bot){conf['BOT_TOKEN']}/sendMessage", data={"chat_id": conf['ADMIN_ID'], "text": txt, "parse_mode": "Markdown"})
+                high_count = 0
+        except: pass
+        time.sleep(20)
+
 def query_geo(ip):
     try:
-        r = requests.get(f"http://ip-api.com/json/{ip}?lang=zh-CN", timeout=2).json()
+        r = requests.get(f"[http://ip-api.com/json/](http://ip-api.com/json/){ip}?lang=zh-CN", timeout=2).json()
         if r.get("status") == "success": return f"{r.get('country','')}{r.get('regionName','')}{r.get('city','')}"
     except: pass
     return "未知所在地"
 
+# === 已完美找回: SSH 防爆破监控器 ===
+def monitor_ssh_login():
+    log_files = ["/var/log/auth.log", "/var/log/secure"]
+    target_log = None
+    for f in log_files:
+        if os.path.exists(f): target_log = f; break
+    if not target_log: return
+    fail_p = re.compile(r"Failed password for (?:invalid user )?(\S+) from (\s*[\d\.]+) port (\d+)")
+    succ_p = re.compile(r"Accepted (?:password|publickey) for (\S+) from (\s*[\d\.]+) port (\d+)")
+    try:
+        with open(target_log, "r", encoding="utf-8", errors="ignore") as f:
+            f.seek(0, os.SEEK_END)
+            while True:
+                line = f.readline()
+                if not line: time.sleep(0.5); continue
+                now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                is_match, status, user, login_ip, port = False, "", "", "", ""
+                if fail_p.search(line): is_match, status = True, "FAILED"; user, login_ip, port = fail_p.search(line).groups()
+                elif succ_p.search(line): is_match, status = True, "SUCCESS"; user, login_ip, port = succ_p.search(line).groups()
+                if is_match:
+                    conf = load_conf()
+                    loc = query_geo(login_ip)
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute("INSERT INTO ssh_history (time, status, user, ip, port, location) VALUES (?, ?, ?, ?, ?, ?)", (now_str, status, user, login_ip, port, loc))
+                    conn.commit()
+                    if status == "SUCCESS":
+                        t = f"🚨 *[SSH 登录成功]*\n\n● 主机: `{conf['VPS_NAME']}`\n● 用户: `{user}`\n● IP: `{login_ip}`"
+                        requests.post(f"[https://api.telegram.org/bot](https://api.telegram.org/bot){conf['BOT_TOKEN']}/sendMessage", data={"chat_id": conf['ADMIN_ID'], "text": t, "parse_mode": "Markdown"})
+                    elif status == "FAILED":
+                        c.execute("SELECT COUNT(*) FROM ssh_history WHERE ip=? AND status='FAILED' AND time >= datetime('now', '-1 day')")
+                        if c.fetchone()[0] >= 10:
+                            c.execute("INSERT OR IGNORE INTO ban_list (ip, ban_time) VALUES (?, ?)", (login_ip, now_str))
+                            conn.commit()
+                            os.system(f"iptables -I INPUT -s {login_ip} -j DROP")
+                    conn.close()
+    except: pass
+
 def run_benchmark(limit=4):
     targets = [
-        {"name": "合肥科大节点", "url": "https://mirrors.ustc.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso"},
-        {"name": "南京大学节点", "url": "https://mirrors.nju.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso"},
-        {"name": "东京优质节点", "url": "http://speedtest.tokyo2.linode.com/100MB-tokyo2.bin"},
-        {"name": "美国西部节点", "url": "http://speedtest.la.linode.com/100MB-la.bin"}
+        {"name": "合肥科大节点", "url": "[https://mirrors.ustc.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso](https://mirrors.ustc.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso)"},
+        {"name": "南京大学节点", "url": "[https://mirrors.nju.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso](https://mirrors.nju.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso)"},
+        {"name": "东京优质节点", "url": "[http://speedtest.tokyo2.linode.com/100MB-tokyo2.bin](http://speedtest.tokyo2.linode.com/100MB-tokyo2.bin)"},
+        {"name": "美国西部节点", "url": "[http://speedtest.la.linode.com/100MB-la.bin](http://speedtest.la.linode.com/100MB-la.bin)"}
     ]
 
     actual_targets = targets[:limit]
@@ -762,7 +847,7 @@ def build_report():
     conf = load_conf()
     tg_s = "🟢 正常"
     try:
-        if requests.get(f"https://api.telegram.org/bot{conf['BOT_TOKEN']}/getMe", timeout=2).status_code != 200: tg_s = "🔴 异常"
+        if requests.get(f"[https://api.telegram.org/bot](https://api.telegram.org/bot){conf['BOT_TOKEN']}/getMe", timeout=2).status_code != 200: tg_s = "🔴 异常"
     except: tg_s = "🔴 异常"
     return f"📊 *⚡ [{conf['VPS_NAME']}] 日报系统* ⚡\n\n● TG连通: {tg_s}\n\n" + get_system_status(True)
 
@@ -950,8 +1035,10 @@ if [ "$1" == "--auto-update" ]; then
     echo "🔄 正在为您重写核心引擎并重启底层守护服务..."
     write_python_engine
     restart_backend_service
+    notify_tg "update"
     echo "🎉 核心服务热重载完成！已顺利过渡到最新版本！"
     sleep 2
+    exit 0
 fi
 
 main_menu
