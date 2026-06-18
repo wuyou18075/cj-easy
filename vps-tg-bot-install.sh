@@ -109,13 +109,19 @@ except Exception as e:
 
 check_depends() {
     local missing=()
-    for cmd in python3 pip3 iptables curl traceroute sqlite3 bc; do
+    for cmd in python3 pip3 iptables curl traceroute sqlite3 bc mtr; do
         if ! command -v $cmd &> /dev/null; then missing+=($cmd); fi
     done
     if [ ${#missing[@]} -ne 0 ]; then
         apt-get update -y >/dev/null 2>&1
-        apt-get install -y python3 python3-pip iptables curl traceroute sqlite3 bc procps openssl >/dev/null 2>&1
+        apt-get install -y python3 python3-pip iptables curl traceroute sqlite3 bc procps openssl mtr-tiny >/dev/null 2>&1
         pip3 install Flask requests python-telegram-bot psutil --break-system-packages --ignore-installed >/dev/null 2>&1
+    fi
+
+    # 安装 NextTrace (测回程必备)
+    if ! command -v nexttrace &> /dev/null; then
+        echo "🌐 正在为您安装开源回程探测器 (NextTrace)..."
+        bash <(curl -fsSL https://nxtrace.org/nt) >/dev/null 2>&1
     fi
 }
 
@@ -188,7 +194,7 @@ refresh_dashboard() {
             traffic_stats="${used_gb} GB / 无限制"
         else
             local pct=$(echo "scale=1; ($used_bytes / ($total_tf * 1024 * 1024 * 1024)) * 100" | bc 2>/dev/null)
-            traffic_stats="${used_gb} GB / ${total_tf} GB (${pct}%) [超过 ${alert_pct}% 自动通知]"
+            traffic_stats="${used_gb} GB / ${total_tf} GB (${pct}%) [预警阀值: ${alert_pct}%]"
         fi
     fi
 
@@ -308,7 +314,6 @@ menu_service() {
             t_port=${t_port:-$rand_port}
             if [[ "$t_port" =~ ^[0-9]+$ ]]; then write_json "PORT" "$t_port"; else write_json "PORT" "$rand_port"; fi
             
-            # 加入无限流量预设询问
             read -p "请输入每月总流量配额 (GB, 回车默认无限流量): " t_traffic
             t_traffic=${t_traffic:-0}
             if [[ "$t_traffic" =~ ^[0-9]+$ ]]; then write_json "TOTAL_TRAFFIC_GB" "$t_traffic"; else write_json "TOTAL_TRAFFIC_GB" "0"; fi
@@ -424,14 +429,14 @@ adjust_freq() { clear; read -p "设置全局轮询频率 (秒): " f_sec; write_j
 menu_monitor() {
     clear
     echo "=== [6] 高级监控中心 ==="
-    echo "  [1] 本机全维度监控 (含中国/海外多骨干网测速)"
+    echo "  [1] 本机全维度监控状态卡"
     echo "  [2] 查看 SSH 登录历史审计"
     echo "  [3] 切换自动化日报状态"
     echo "  [4] 国内安徽三网延迟测定"
     read -p "请输入选项: " m_num
     case "$m_num" in
         1)
-            python3 -c "import sys; sys.path.append('$CONFIG_DIR'); from main import get_system_status, run_benchmark; print(get_system_status()); print(run_benchmark())"
+            python3 -c "import sys; sys.path.append('$CONFIG_DIR'); from main import get_system_status; print(get_system_status(False))"
             read -p "回车返回..." ;;
         2)
             local default_page=$(read_json "SSH_PAGE_SIZE")
@@ -541,11 +546,25 @@ wake_tg_connection() {
 
 write_python_engine() {
 cat << 'EOF_PY' > ${CONFIG_DIR}/main.py
-import os, sys, time, json, sqlite3, datetime, requests, re, threading
+import os, sys, time, json, sqlite3, datetime, requests, re, threading, asyncio
 from threading import Thread
 
 CONF_PATH = "/root/tg_vps_bot/config.json"
 DB_PATH = "/root/tg_vps_bot/cluster.db"
+
+# 纯正的国内核心线路特征库 (自带翻译官)
+AS_MAP = {
+    "AS4134": "中国电信(163骨干网)",
+    "AS4809": "中国电信(CN2 GIA/GT)",
+    "AS4837": "中国联通(169骨干网)",
+    "AS9929": "中国联通(A网/9929)",
+    "AS10099": "中国联通(国际CUG)",
+    "AS9808": "中国移动(国内骨干)",
+    "AS58453": "中国移动(国际CMI)",
+    "AS58807": "中国移动(CMIN2)",
+    "AS4538": "中国教育网(CERNET)",
+    "AS科技": "科技网(CSTNET)"
+}
 
 def load_conf():
     with open(CONF_PATH, "r") as f: return json.load(f)
@@ -560,7 +579,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS report_counter (id INTEGER PRIMARY KEY, count INTEGER DEFAULT 0)''')
     c.execute("INSERT OR IGNORE INTO report_counter (id, count) VALUES (1, 0)")
     c.execute("INSERT OR IGNORE INTO report_counter (id, count) VALUES (2, 0)")
-    # id=3 is net raw total, id=4 is traffic alert month tracker
     c.execute("INSERT OR IGNORE INTO report_counter (id, count) VALUES (4, 0)")
     conf = load_conf()
     c.execute("INSERT OR IGNORE INTO whitelist (user_id, username, added_time) VALUES (?, ?, ?)", (str(conf["ADMIN_ID"]), "Main_Admin", datetime.datetime.now().strftime("%Y-%m-%d")))
@@ -588,7 +606,6 @@ def traffic_persistent_worker():
             
             c.execute("UPDATE report_counter SET count = count + ? WHERE id=2", (delta,))
             
-            # --- 🚀 完美闭环：实时流量报警监控器 ---
             conf = load_conf()
             total_g = conf.get("TOTAL_TRAFFIC_GB", 0)
             alert_pct = conf.get("TRAFFIC_ALERT_PCT", 80)
@@ -621,20 +638,17 @@ def query_geo(ip):
     except: pass
     return "未知所在地"
 
-def run_benchmark():
-    # 动态获取核心数量，如果是1核最高给到2线程，多了不仅卡爆还会反作用负优化
-    core_count = os.cpu_count() or 1
-    threads = 2 if core_count == 1 else min(4, core_count)
+def run_benchmark(limit=4):
+    targets = [
+        {"name": "合肥科大节点", "url": "https://mirrors.ustc.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso"},
+        {"name": "南京大学节点", "url": "https://mirrors.nju.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso"},
+        {"name": "东京优质节点", "url": "http://speedtest.tokyo2.linode.com/100MB-tokyo2.bin"},
+        {"name": "美国西部节点", "url": "http://speedtest.la.linode.com/100MB-la.bin"}
+    ]
 
-    # 替换成了更大更有说服力的文件，抛弃瞬间下完的小文件，测速更准
-    targets = {
-        "南京大学节点": "https://mirrors.nju.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso",
-        "合肥科大节点": "https://mirrors.ustc.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso",
-        "东京优质节点": "http://speedtest.tokyo2.linode.com/100MB-tokyo2.bin",
-        "美国洛杉矶节点": "http://speedtest.la.linode.com/100MB-la.bin"
-    }
+    actual_targets = targets[:limit]
 
-    def download_test(url, res_list):
+    def download_test(url):
         try:
             t0 = time.time()
             r = requests.get(url, timeout=4, stream=True)
@@ -643,39 +657,67 @@ def run_benchmark():
                 if chunk: sz += len(chunk)
                 if time.time() - t0 > 3: break
             dur = time.time() - t0
-            res_list.append(sz / dur if dur > 0 else 0)
-        except: res_list.append(0)
+            return (sz / dur if dur > 0 else 0)
+        except: return 0
 
     results = []
-    for name, url in targets.items():
-        # 单线程测速
-        s_res = []
-        download_test(url, s_res)
-        s_speed = (s_res[0] * 8) / (1024**2) if s_res else 0
+    for item in actual_targets:
+        speed_bps = download_test(item["url"])
+        speed_mbps = (speed_bps * 8) / (1024**2)
+        
+        results.append(f"● {item['name']}: `{speed_mbps:.2f} Mbps`\n  URL: `{item['url']}`")
+        time.sleep(1) # 单线程对网卡冲击不大，1秒间隔即可
 
-        # 防网卡拥堵强制睡眠 3 秒
-        time.sleep(3)
+    res_str = "\n\n".join(results)
+    return f"\n🚀 *单线程精细网速诊断* (测点数: {limit})\n\n{res_str}"
 
-        # 多线程测速
-        m_res = []
-        th_list = []
-        for _ in range(threads):
-            t = threading.Thread(target=download_test, args=(url, m_res))
-            th_list.append(t)
-            t.start()
-        for t in th_list: t.join()
-        m_speed = (sum(m_res) * 8) / (1024**2)
+async def parse_mtr_async(target_ip):
+    try:
+        # 使用 asyncio 子进程跑 50 次发包，绝对不再超时阻塞！
+        proc = await asyncio.create_subprocess_exec(
+            "mtr", "-rwz", "-c", "50", target_ip,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        output = stdout.decode().strip().split('\n')
+    except Exception as e:
+        return f"❌ MTR 运行异常：{str(e)}"
+    
+    if len(output) < 2: return "❌ MTR 未能获取到路由数据。"
 
-        # 再次间隔 3 秒，为下一个节点让路防死锁
-        time.sleep(3)
+    parsed_lines = []
+    parsed_lines.append("`序号 | AS / 域名 / IP | 丢包 | 延迟 | 抖动`")
+    parsed_lines.append("-------------------------------------------------")
+    
+    for line in output[1:]: # 跳过表头
+        parts = line.split()
+        if len(parts) < 8: continue
+        
+        # 处理可能的缺失 AS 字段
+        hop_num = parts[0].replace('.', '')
+        asn = parts[1] if parts[1].startswith('AS') else "AS???"
+        
+        # 如果第二个部分不是 AS，说明 MTR 解析 AS 失败了，整体列往前推移
+        if asn == "AS???":
+            host_info = parts[1]
+        else:
+            host_info = parts[2]
+        
+        # 取倒数 6 列的数据：Loss% Snt Last Avg Best Wrst StDev
+        loss = parts[-6]
+        avg_lat = parts[-4]
+        stdev = parts[-1]
+        
+        # 加上中文备注翻译官
+        as_note = AS_MAP.get(asn, "")
+        as_display = f"{asn} {as_note}" if as_note else asn
+        
+        parsed_lines.append(f"`{hop_num}.` `{as_display}`\n  └ `{host_info}` | `{loss}` | `{avg_lat}ms` | `{stdev}ms`")
 
-        # 全面对齐排版：● 节点名称: 单线程 / 多线程
-        results.append(f"● {name}: {s_speed:.2f} Mbps / {m_speed:.2f} Mbps")
+    return "\n".join(parsed_lines)
 
-    res_str = "\n".join(results)
-    return f"\n🚀 国内外网络压榨测速\n             单线程 / 多线程 ({threads}并发)\n{res_str}"
-
-def get_system_status():
+def get_system_status(is_tg=True):
     import psutil
     conf = load_conf()
     core_count = os.cpu_count() or 1
@@ -687,89 +729,49 @@ def get_system_status():
     c = conn.cursor()
     c.execute("SELECT count FROM report_counter WHERE id=2")
     used_bytes = c.fetchone()[0]
+    
+    # 抽取 SSH 失败次数 和 日报状态 (TG环境专属)
+    c.execute("SELECT COUNT(*) FROM ssh_history WHERE status='FAILED' AND time >= datetime('now', '-30 day')")
+    f_30 = c.fetchone()[0]
+    c.execute("SELECT count FROM report_counter WHERE id=1")
+    report_status = "🟢已开启" if c.fetchone()[0] % 2 == 1 else "🔴已关闭"
     conn.close()
     
     total_g = conf.get("TOTAL_TRAFFIC_GB", 0)
+    alert_pct = conf.get("TRAFFIC_ALERT_PCT", 80)
     used_g = used_bytes / (1024**3)
     
-    # 无限流量友好显示
     if total_g == 0:
-        tf_str = f"{used_g:.2f}G / 无限制 (流量报警不触发)"
+        tf_str = f"`{used_g:.2f}G` / `无限制`"
+        alert_str = "未激活"
     else:
         pct = (used_g / total_g) * 100
-        tf_str = f"{used_g:.2f}G / {total_g}G ({pct:.1f}%)"
+        tf_str = f"`{used_g:.2f}G` / `{total_g}G` ({pct:.1f}%)"
+        alert_str = f"{alert_pct}%"
     
-    return (f"🖥️ [{conf['VPS_NAME']}] 服务器监控快照\n\n"
-            f"● CPU 使用率: {cpu_usage}% ({core_count}核)\n"
-            f"● 内存损耗: {mem.percent}% ({mem.used // (1024**2)}M / {mem.total // (1024**2)}M)\n"
-            f"● 硬盘结余: {disk.percent}% ({disk.free // (1024**3)}G)\n"
-            f"● 流量配额: {tf_str}\n")
+    # 彻底修复: disk.total 才是真实的物理硬盘总容量
+    disk_total_g = disk.total // (1024**3)
 
-def cpu_load_guardian():
-    import psutil
-    high_count = 0
-    while True:
-        try:
-            conf = load_conf()
-            cpu = psutil.cpu_percent(interval=1)
-            if cpu >= conf.get("CPU_HIGH_LOAD_ALERT_PCT", 90): high_count += 1
-            else: high_count = 0
-            if high_count >= 3:
-                txt = f"🔥 *[重大安全警报]*\n\n主机 `{conf['VPS_NAME']}` CPU 连续三次满载死锁 (`{cpu}%`)！"
-                requests.post(f"https://api.telegram.org/bot{conf['BOT_TOKEN']}/sendMessage", data={"chat_id": conf['ADMIN_ID'], "text": txt, "parse_mode": "Markdown"})
-                high_count = 0
-        except: pass
-        time.sleep(20)
+    if is_tg:
+        header = (f"● SSH失败: `{f_30} 次`\n"
+                  f"● 日报状态: {report_status}\n"
+                  f"● 流量配额: {tf_str}\n"
+                  f"● 预警阈值: `{alert_str}`\n\n")
+    else:
+        header = ""
 
-def monitor_ssh_login():
-    log_files = ["/var/log/auth.log", "/var/log/secure"]
-    target_log = None
-    for f in log_files:
-        if os.path.exists(f): target_log = f; break
-    if not target_log: return
-    fail_p = re.compile(r"Failed password for (?:invalid user )?(\S+) from (\s*[\d\.]+) port (\d+)")
-    succ_p = re.compile(r"Accepted (?:password|publickey) for (\S+) from (\s*[\d\.]+) port (\d+)")
-    try:
-        with open(target_log, "r", encoding="utf-8", errors="ignore") as f:
-            f.seek(0, os.SEEK_END)
-            while True:
-                line = f.readline()
-                if not line: time.sleep(0.5); continue
-                now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                is_match, status, user, login_ip, port = False, "", "", "", ""
-                if fail_p.search(line): is_match, status = True, "FAILED"; user, login_ip, port = fail_p.search(line).groups()
-                elif succ_p.search(line): is_match, status = True, "SUCCESS"; user, login_ip, port = succ_p.search(line).groups()
-                if is_match:
-                    conf = load_conf()
-                    loc = query_geo(login_ip)
-                    conn = sqlite3.connect(DB_PATH)
-                    c = conn.cursor()
-                    c.execute("INSERT INTO ssh_history (time, status, user, ip, port, location) VALUES (?, ?, ?, ?, ?, ?)", (now_str, status, user, login_ip, port, loc))
-                    conn.commit()
-                    if status == "SUCCESS":
-                        t = f"🚨 *[SSH 登录成功]*\n\n● 主机: `{conf['VPS_NAME']}`\n● 用户: `{user}`\n● IP: `{login_ip}`"
-                        requests.post(f"https://api.telegram.org/bot{conf['BOT_TOKEN']}/sendMessage", data={"chat_id": conf['ADMIN_ID'], "text": t, "parse_mode": "Markdown"})
-                    elif status == "FAILED":
-                        c.execute("SELECT COUNT(*) FROM ssh_history WHERE ip=? AND status='FAILED' AND time >= datetime('now', '-1 day')")
-                        if c.fetchone()[0] >= 10:
-                            c.execute("INSERT OR IGNORE INTO ban_list (ip, ban_time) VALUES (?, ?)", (login_ip, now_str))
-                            conn.commit()
-                            os.system(f"iptables -I INPUT -s {login_ip} -j DROP")
-                    conn.close()
-    except: pass
+    return (f"{header}🖥️ *[{conf['VPS_NAME']}] 服务器监控快照*\n\n"
+            f"● CPU 使用率: `{cpu_usage}%` ({core_count}核)\n"
+            f"● 内存损耗: `{mem.percent}%` ({mem.used // (1024**2)}M / {mem.total // (1024**2)}M)\n"
+            f"● 硬盘: `{disk.percent}%` ({disk_total_g}G)\n")
 
 def build_report():
     conf = load_conf()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM ssh_history WHERE status='FAILED' AND time >= datetime('now', '-30 day')")
-    f_30 = c.fetchone()[0]
-    conn.close()
     tg_s = "🟢 正常"
     try:
         if requests.get(f"https://api.telegram.org/bot{conf['BOT_TOKEN']}/getMe", timeout=2).status_code != 200: tg_s = "🔴 异常"
     except: tg_s = "🔴 异常"
-    return f"📊 *⚡ [{conf['VPS_NAME']}] 日报系统* ⚡\n\n● TG连通: {tg_s}\n● 30天防爆破数: `{f_30} 次`\n\n" + get_system_status()
+    return f"📊 *⚡ [{conf['VPS_NAME']}] 日报系统* ⚡\n\n● TG连通: {tg_s}\n\n" + get_system_status(True)
 
 def run_bot():
     from telegram import Update
@@ -787,111 +789,62 @@ def run_bot():
 
     async def start(u, c):
         conf = load_conf()
-        # 移除了 bullet 点号，并确保行首斜杠能直接点击 (Telegram 原生高亮蓝字可点逻辑)
         m = (f"🛡️ 专属集群管理就绪 ({conf['VPS_NAME']})\n\n"
-             f"/status - 实时快照与国内外多节点测速\n"
-             f"/report - 提取运维日报\n"
-             f"/toggle - 翻转日报开启状态\n"
-             f"/ping - 安徽三网骨干链路诊断\n"
-             f"/node - 提取节点配置\n"
+             f"/status - 提取服务器综合监控大盘\n"
+             f"/speed [节点数] - 触发单线程精细网速诊断\n"
+             f"/mtr [目标IP] - MTR 深度回程解析(带线路备注)\n"
+             f"/trace [目标IP] - 调用 NextTrace 智能测回程\n"
+             f"/report - 提取运维全貌日报\n"
+             f"/toggle - 翻转自动化日报开启状态\n"
+             f"/ping - 提取合肥三网骨干链路延迟\n"
+             f"/node - 提取节点配置文件内容\n"
              f"/traffic <配额> - 设置本月流量预设(GB)\n"
              f"/alert <阈值> - 设置流量预警线(百分比)")
         await u.message.reply_text(m)
 
     async def status_cmd(u, c):
-        await u.message.reply_text("⏱️ 正在实时调度多节点双轨并发测速...\n\n(为防止网卡死锁，节点间已增加底层防拥堵降温延时，请耐心等待)")
-        await u.message.reply_text(get_system_status() + run_benchmark())
+        await u.message.reply_text(get_system_status(True), parse_mode="Markdown")
 
-    async def traffic_cmd(u, c):
-        if not c.args:
-            await u.message.reply_text("ℹ️ 请在指令后加上数字（GB）。例如设置 89G:\n`/traffic 89`\n设置无限流量请输入 0:\n`/traffic 0`", parse_mode="Markdown")
-            return
-        try:
-            val = int(c.args[0].lower().replace('g', ''))
-            conf = load_conf()
-            conf["TOTAL_TRAFFIC_GB"] = val
-            with open(CONF_PATH, "w") as f: json.dump(conf, f, indent=4)
-            await u.message.reply_text(f"✅ 每月总流量配额已更新为: {'无限流量' if val == 0 else f'{val} GB'}")
-        except:
-            await u.message.reply_text("❌ 格式错误，无法识别。例如: `/traffic 89`", parse_mode="Markdown")
+    async def speed_cmd(u, c):
+        limit = 4
+        if c.args:
+            try:
+                val = int(c.args[0])
+                limit = max(1, min(4, val))
+            except: pass
+        await u.message.reply_text(f"⏱️ 正在调度单线程源站测速 (配置节点数: {limit})，请耐心等待...", parse_mode="Markdown")
+        await u.message.reply_text(run_benchmark(limit), parse_mode="Markdown")
 
-    async def alert_cmd(u, c):
-        if not c.args:
-            await u.message.reply_text("ℹ️ 请在指令后加上数字（百分比）。例如设置 80%:\n`/alert 80`", parse_mode="Markdown")
-            return
-        try:
-            val = int(c.args[0].replace('%', ''))
-            conf = load_conf()
-            conf["TRAFFIC_ALERT_PCT"] = val
-            with open(CONF_PATH, "w") as f: json.dump(conf, f, indent=4)
-            await u.message.reply_text(f"✅ 流量预警百分比已更新为: {val}%")
-        except:
-            await u.message.reply_text("❌ 格式错误，无法识别。例如: `/alert 80`", parse_mode="Markdown")
+    async def mtr_cmd(u, c):
+        target_ip = "211.138.180.2" # 默认安徽移动节点(常被中科大等使用)
+        if c.args: target_ip = c.args[0].strip()
+        
+        # 立即回复用户，避免他们死等
+        await u.message.reply_text(f"📡 正在后台执行 MTR 深度回程解析 (50 次强力发包)...\n*目标 IP:* `{target_ip}`\n_(预计耗时 1~2 分钟，您可以去干别的，测试完成后机器人会自动将精美报告发送给您！)_", parse_mode="Markdown")
+        
+        # 开启真·后台异步任务，绝对不阻塞服务器核心与其他指令
+        async def background_mtr():
+            res = await parse_mtr_async(target_ip)
+            await c.bot.send_message(chat_id=u.effective_chat.id, text=f"🛣️ *MTR 回程诊断报告 ({target_ip})*\n\n{res}", parse_mode="Markdown")
+            
+        asyncio.create_task(background_mtr())
 
-    async def report_cmd(u, c): await u.message.reply_text(build_report())
-
-    async def toggle_cmd(u, c):
-        conn = sqlite3.connect(DB_PATH)
-        curr = conn.cursor()
-        curr.execute("UPDATE report_counter SET count = count + 1 WHERE id=1")
-        curr.execute("SELECT count FROM report_counter WHERE id=1")
-        cnt = curr.fetchone()[0]
-        conn.commit(); conn.close()
-        status = 1 if cnt % 2 == 1 else 0
-        conf = load_conf()
-        conf["REPORT_ENABLED"] = status
-        with open(CONF_PATH, "w") as f: json.dump(conf, f, indent=4)
-        await u.message.reply_text(f"📊 状态翻转成功！日报: {'🟢已开启' if status==1 else '🔴已关闭'}")
-
-    async def ping_cmd(u, c):
-        import subprocess
-        tel = subprocess.getoutput("ping -c 2 -q 61.132.163.68 | awk -F/ '/rtt/ {print $5}'")
-        uni = subprocess.getoutput("ping -c 2 -q 218.104.78.2 | awk -F/ '/rtt/ {print $5}'")
-        mob = subprocess.getoutput("ping -c 2 -q 211.138.180.2 | awk -F/ '/rtt/ {print $5}'")
-        await u.message.reply_text(f"📡 *安徽三网骨干网络延迟诊断*\n\n● 电信 (合肥): `{tel or '超时'} ms`\n● 联通 (合肥): `{uni or '超时'} ms`\n● 移动 (合肥): `{mob or '超时'} ms`", parse_mode="Markdown")
-
-    async def node_cmd(u, c):
-        f_p = "/root/v2rayn-node.txt"
-        if not os.path.exists(f_p): await u.message.reply_text("ℹ️ 未检测到 `/root/v2rayn-node.txt` 文件。")
-        else:
-            with open(f_p, "r", encoding="utf-8", errors="ignore") as f: txt = f.read().strip()
-            if not txt: await u.message.reply_text("ℹ️ 节点配置文件为空。")
-            else: await u.message.reply_text(f"```text\n{txt}\n```", parse_mode="Markdown")
-
-    conf = load_conf()
-    app = Application.builder().token(conf["BOT_TOKEN"]).build()
-    app.add_handler(CommandHandler("start", lambda u, c: wrapper(start, u, c)))
-    app.add_handler(CommandHandler("status", lambda u, c: wrapper(status_cmd, u, c)))
-    app.add_handler(CommandHandler("report", lambda u, c: wrapper(report_cmd, u, c)))
-    app.add_handler(CommandHandler("toggle", lambda u, c: wrapper(toggle_cmd, u, c)))
-    app.add_handler(CommandHandler("ping", lambda u, c: wrapper(ping_cmd, u, c)))
-    app.add_handler(CommandHandler("node", lambda u, c: wrapper(node_cmd, u, c)))
-    
-    # 新增的两个底层控制命令注册
-    app.add_handler(CommandHandler("traffic", lambda u, c: wrapper(traffic_cmd, u, c)))
-    app.add_handler(CommandHandler("alert", lambda u, c: wrapper(alert_cmd, u, c)))
-    
-    app.run_polling()
-
-if __name__ == "__main__":
-    init_db()
-    Thread(target=traffic_persistent_worker, daemon=True).start()
-    Thread(target=monitor_ssh_login, daemon=True).start()
-    Thread(target=cpu_load_guardian, daemon=True).start()
-    run_bot()
-EOF_PY
-}
-
-check_depends
-init_config
-
-# 拦截热更新传递的系统参数 (实现代码热覆盖与无缝重载)
-if [ "$1" == "--auto-update" ]; then
-    echo "🔄 正在为您重写核心引擎并重启底层守护服务..."
-    write_python_engine
-    restart_backend_service
-    echo "🎉 核心服务热重载完成！已顺利过渡到最新版本！"
-    sleep 2
-fi
-
-main_menu
+    async def trace_cmd(u, c):
+        target_ip = "211.138.180.2"
+        if c.args: target_ip = c.args[0].strip()
+        await u.message.reply_text(f"🌍 正在后台调用 NextTrace 智能追踪地图引擎...\n*目标 IP:* `{target_ip}`\n_(测试完成后自动推送给您，请稍候...)_", parse_mode="Markdown")
+        
+        async def background_trace():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "nexttrace", "--fast-trace", target_ip,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await proc.communicate()
+                out = stdout.decode().strip()
+                if not out: out = "❌ NextTrace 获取失败，请检查 VPS 是否允许 ICMP/UDP 出站。"
+            except Exception as e:
+                out = f"❌ NextTrace 执行异常: {e}"
+            # Telegram 有 4096 字符限制，做个截断保护
+            await c.bot.send_message(chat_id=u.effective_chat.id, text=f"
