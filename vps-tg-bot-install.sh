@@ -546,7 +546,7 @@ wake_tg_connection() {
 
 write_python_engine() {
 cat << 'EOF_PY' > ${CONFIG_DIR}/main.py
-import os, sys, time, json, sqlite3, datetime, requests, re, threading, asyncio
+import os, sys, time, json, sqlite3, datetime, requests, re, threading, asyncio, subprocess
 from threading import Thread
 
 CONF_PATH = "/root/tg_vps_bot/config.json"
@@ -673,9 +673,8 @@ def run_benchmark(limit=4):
 
 async def parse_mtr_async(target_ip):
     try:
-        # 使用 asyncio 子进程跑 50 次发包，绝对不再超时阻塞！
         proc = await asyncio.create_subprocess_exec(
-            "mtr", "-rwz", "-c", "50", target_ip,
+            "mtr", "-rwz", "-c", "30", target_ip,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
@@ -694,22 +693,18 @@ async def parse_mtr_async(target_ip):
         parts = line.split()
         if len(parts) < 8: continue
         
-        # 处理可能的缺失 AS 字段
         hop_num = parts[0].replace('.', '')
         asn = parts[1] if parts[1].startswith('AS') else "AS???"
         
-        # 如果第二个部分不是 AS，说明 MTR 解析 AS 失败了，整体列往前推移
         if asn == "AS???":
             host_info = parts[1]
         else:
             host_info = parts[2]
         
-        # 取倒数 6 列的数据：Loss% Snt Last Avg Best Wrst StDev
         loss = parts[-6]
         avg_lat = parts[-4]
         stdev = parts[-1]
         
-        # 加上中文备注翻译官
         as_note = AS_MAP.get(asn, "")
         as_display = f"{asn} {as_note}" if as_note else asn
         
@@ -730,7 +725,6 @@ def get_system_status(is_tg=True):
     c.execute("SELECT count FROM report_counter WHERE id=2")
     used_bytes = c.fetchone()[0]
     
-    # 抽取 SSH 失败次数 和 日报状态 (TG环境专属)
     c.execute("SELECT COUNT(*) FROM ssh_history WHERE status='FAILED' AND time >= datetime('now', '-30 day')")
     f_30 = c.fetchone()[0]
     c.execute("SELECT count FROM report_counter WHERE id=1")
@@ -749,7 +743,6 @@ def get_system_status(is_tg=True):
         tf_str = f"`{used_g:.2f}G` / `{total_g}G` ({pct:.1f}%)"
         alert_str = f"{alert_pct}%"
     
-    # 彻底修复: disk.total 才是真实的物理硬盘总容量
     disk_total_g = disk.total // (1024**3)
 
     if is_tg:
@@ -773,6 +766,12 @@ def build_report():
     except: tg_s = "🔴 异常"
     return f"📊 *⚡ [{conf['VPS_NAME']}] 日报系统* ⚡\n\n● TG连通: {tg_s}\n\n" + get_system_status(True)
 
+def ping_test_sync():
+    tel = subprocess.getoutput("ping -c 2 -q 61.132.163.68 | awk -F/ '/rtt/ {print $5}'")
+    uni = subprocess.getoutput("ping -c 2 -q 218.104.78.2 | awk -F/ '/rtt/ {print $5}'")
+    mob = subprocess.getoutput("ping -c 2 -q 211.138.180.2 | awk -F/ '/rtt/ {print $5}'")
+    return tel, uni, mob
+
 def run_bot():
     from telegram import Update
     from telegram.ext import Application, CommandHandler, ContextTypes
@@ -785,7 +784,8 @@ def run_bot():
             auth = c.fetchone() is not None
             conn.close()
             if auth: await func(update, context)
-        except Exception as err: pass
+        except Exception as err: 
+            print(f"Error in {func.__name__}: {err}")
 
     async def start(u, c):
         conf = load_conf()
@@ -803,7 +803,9 @@ def run_bot():
         await u.message.reply_text(m)
 
     async def status_cmd(u, c):
-        await u.message.reply_text(get_system_status(True), parse_mode="Markdown")
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(None, get_system_status, True)
+        await u.message.reply_text(res, parse_mode="Markdown")
 
     async def speed_cmd(u, c):
         limit = 4
@@ -813,45 +815,41 @@ def run_bot():
                 limit = max(1, min(4, val))
             except: pass
         await u.message.reply_text(f"⏱️ 正在调度单线程源站测速 (配置节点数: {limit})，请耐心等待...", parse_mode="Markdown")
-        await u.message.reply_text(run_benchmark(limit), parse_mode="Markdown")
+        
+        # 放入线程池执行，绝对不阻塞 TG 机器人主线程！
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(None, run_benchmark, limit)
+        await u.message.reply_text(res, parse_mode="Markdown")
 
     async def mtr_cmd(u, c):
         target_ip = "211.138.180.2" # 默认安徽移动节点(常被中科大等使用)
         if c.args: target_ip = c.args[0].strip()
         
-        # 立即回复用户，避免他们死等
-        await u.message.reply_text(f"📡 正在后台执行 MTR 深度回程解析 (50 次强力发包)...\n*目标 IP:* `{target_ip}`\n_(预计耗时 1~2 分钟，您可以去干别的，测试完成后机器人会自动将精美报告发送给您！)_", parse_mode="Markdown")
+        await u.message.reply_text(f"📡 正在执行 MTR 深度回程解析 (30 次发包)...\n*目标 IP:* `{target_ip}`\n_(预计耗时 15~20 秒，请稍候)_", parse_mode="Markdown")
         
-        # 开启真·后台异步任务，绝对不阻塞服务器核心与其他指令
-        async def background_mtr():
-            res = await parse_mtr_async(target_ip)
-            await c.bot.send_message(chat_id=u.effective_chat.id, text=f"🛣️ *MTR 回程诊断报告 ({target_ip})*\n\n{res}", parse_mode="Markdown")
-            
-        asyncio.create_task(background_mtr())
+        # 原生异步调用，绝不堵塞
+        res = await parse_mtr_async(target_ip)
+        await u.message.reply_text(f"🛣️ *MTR 回程诊断报告 ({target_ip})*\n\n{res}", parse_mode="Markdown")
 
     async def trace_cmd(u, c):
         target_ip = "211.138.180.2"
         if c.args: target_ip = c.args[0].strip()
-        await u.message.reply_text(f"🌍 正在后台调用 NextTrace 智能追踪地图引擎...\n*目标 IP:* `{target_ip}`\n_(测试完成后自动推送给您，请稍候...)_", parse_mode="Markdown")
+        await u.message.reply_text(f"🌍 正在调用 NextTrace 智能追踪地图引擎...\n*目标 IP:* `{target_ip}`\n_(请稍候...)_", parse_mode="Markdown")
         
-        async def background_trace():
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "nexttrace", "--fast-trace", target_ip,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                out = stdout.decode().strip()
-                if not out: out = "❌ NextTrace 获取失败，请检查 VPS 是否允许 ICMP/UDP 出站。"
-            except Exception as e:
-                out = f"❌ NextTrace 执行异常: {e}"
-            
-            # 使用特定变量拼装，完美绕过外部解析器截断
-            fence = "`" * 3
-            await c.bot.send_message(chat_id=u.effective_chat.id, text=f"{fence}text\n{out[:4000]}\n{fence}", parse_mode="Markdown")
-            
-        asyncio.create_task(background_trace())
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nexttrace", "--fast-trace", target_ip,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            out = stdout.decode().strip()
+            if not out: out = "❌ NextTrace 获取失败，请检查 VPS 是否允许 ICMP/UDP 出站。"
+        except Exception as e:
+            out = f"❌ NextTrace 执行异常: {e}"
+        
+        fence = "`" * 3
+        await u.message.reply_text(f"{fence}text\n{out[:4000]}\n{fence}", parse_mode="Markdown")
 
     async def traffic_cmd(u, c):
         if not c.args:
@@ -879,7 +877,10 @@ def run_bot():
         except:
             await u.message.reply_text("❌ 格式错误，无法识别。例如: `/alert 80`", parse_mode="Markdown")
 
-    async def report_cmd(u, c): await u.message.reply_text(build_report(), parse_mode="Markdown")
+    async def report_cmd(u, c): 
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(None, build_report)
+        await u.message.reply_text(res, parse_mode="Markdown")
 
     async def toggle_cmd(u, c):
         conn = sqlite3.connect(DB_PATH)
@@ -895,10 +896,8 @@ def run_bot():
         await u.message.reply_text(f"📊 状态翻转成功！日报: {'🟢已开启' if status==1 else '🔴已关闭'}")
 
     async def ping_cmd(u, c):
-        import subprocess
-        tel = subprocess.getoutput("ping -c 2 -q 61.132.163.68 | awk -F/ '/rtt/ {print $5}'")
-        uni = subprocess.getoutput("ping -c 2 -q 218.104.78.2 | awk -F/ '/rtt/ {print $5}'")
-        mob = subprocess.getoutput("ping -c 2 -q 211.138.180.2 | awk -F/ '/rtt/ {print $5}'")
+        loop = asyncio.get_running_loop()
+        tel, uni, mob = await loop.run_in_executor(None, ping_test_sync)
         await u.message.reply_text(f"📡 *安徽三网骨干网络延迟诊断*\n\n● 电信 (合肥): `{tel or '超时'} ms`\n● 联通 (合肥): `{uni or '超时'} ms`\n● 移动 (合肥): `{mob or '超时'} ms`", parse_mode="Markdown")
 
     async def node_cmd(u, c):
