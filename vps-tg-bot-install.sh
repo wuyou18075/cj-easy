@@ -846,5 +846,107 @@ def run_bot():
                 if not out: out = "❌ NextTrace 获取失败，请检查 VPS 是否允许 ICMP/UDP 出站。"
             except Exception as e:
                 out = f"❌ NextTrace 执行异常: {e}"
-            # Telegram 有 4096 字符限制，做个截断保护
-            await c.bot.send_message(chat_id=u.effective_chat.id, text=f"
+            
+            # 使用特定变量拼装，完美绕过外部解析器截断
+            fence = "`" * 3
+            await c.bot.send_message(chat_id=u.effective_chat.id, text=f"{fence}text\n{out[:4000]}\n{fence}", parse_mode="Markdown")
+            
+        asyncio.create_task(background_trace())
+
+    async def traffic_cmd(u, c):
+        if not c.args:
+            await u.message.reply_text("ℹ️ 请在指令后加上数字（GB）。例如设置 89G:\n`/traffic 89`\n设置无限流量请输入 0:\n`/traffic 0`", parse_mode="Markdown")
+            return
+        try:
+            val = int(c.args[0].lower().replace('g', ''))
+            conf = load_conf()
+            conf["TOTAL_TRAFFIC_GB"] = val
+            with open(CONF_PATH, "w") as f: json.dump(conf, f, indent=4)
+            await u.message.reply_text(f"✅ 每月总流量配额已更新为: {'无限流量' if val == 0 else f'{val} GB'}")
+        except:
+            await u.message.reply_text("❌ 格式错误，无法识别。例如: `/traffic 89`", parse_mode="Markdown")
+
+    async def alert_cmd(u, c):
+        if not c.args:
+            await u.message.reply_text("ℹ️ 请在指令后加上数字（百分比）。例如设置 80%:\n`/alert 80`", parse_mode="Markdown")
+            return
+        try:
+            val = int(c.args[0].replace('%', ''))
+            conf = load_conf()
+            conf["TRAFFIC_ALERT_PCT"] = val
+            with open(CONF_PATH, "w") as f: json.dump(conf, f, indent=4)
+            await u.message.reply_text(f"✅ 流量预警百分比已更新为: {val}%")
+        except:
+            await u.message.reply_text("❌ 格式错误，无法识别。例如: `/alert 80`", parse_mode="Markdown")
+
+    async def report_cmd(u, c): await u.message.reply_text(build_report(), parse_mode="Markdown")
+
+    async def toggle_cmd(u, c):
+        conn = sqlite3.connect(DB_PATH)
+        curr = conn.cursor()
+        curr.execute("UPDATE report_counter SET count = count + 1 WHERE id=1")
+        curr.execute("SELECT count FROM report_counter WHERE id=1")
+        cnt = curr.fetchone()[0]
+        conn.commit(); conn.close()
+        status = 1 if cnt % 2 == 1 else 0
+        conf = load_conf()
+        conf["REPORT_ENABLED"] = status
+        with open(CONF_PATH, "w") as f: json.dump(conf, f, indent=4)
+        await u.message.reply_text(f"📊 状态翻转成功！日报: {'🟢已开启' if status==1 else '🔴已关闭'}")
+
+    async def ping_cmd(u, c):
+        import subprocess
+        tel = subprocess.getoutput("ping -c 2 -q 61.132.163.68 | awk -F/ '/rtt/ {print $5}'")
+        uni = subprocess.getoutput("ping -c 2 -q 218.104.78.2 | awk -F/ '/rtt/ {print $5}'")
+        mob = subprocess.getoutput("ping -c 2 -q 211.138.180.2 | awk -F/ '/rtt/ {print $5}'")
+        await u.message.reply_text(f"📡 *安徽三网骨干网络延迟诊断*\n\n● 电信 (合肥): `{tel or '超时'} ms`\n● 联通 (合肥): `{uni or '超时'} ms`\n● 移动 (合肥): `{mob or '超时'} ms`", parse_mode="Markdown")
+
+    async def node_cmd(u, c):
+        f_p = "/root/v2rayn-node.txt"
+        if not os.path.exists(f_p): await u.message.reply_text("ℹ️ 未检测到 `/root/v2rayn-node.txt` 文件。")
+        else:
+            with open(f_p, "r", encoding="utf-8", errors="ignore") as f: txt = f.read().strip()
+            if not txt: await u.message.reply_text("ℹ️ 节点配置文件为空。")
+            else: 
+                fence = "`" * 3
+                await u.message.reply_text(f"{fence}text\n{txt}\n{fence}", parse_mode="Markdown")
+
+    conf = load_conf()
+    app = Application.builder().token(conf["BOT_TOKEN"]).build()
+    
+    app.add_handler(CommandHandler("start", lambda u, c: wrapper(start, u, c)))
+    app.add_handler(CommandHandler("status", lambda u, c: wrapper(status_cmd, u, c)))
+    app.add_handler(CommandHandler("speed", lambda u, c: wrapper(speed_cmd, u, c)))
+    app.add_handler(CommandHandler("mtr", lambda u, c: wrapper(mtr_cmd, u, c)))
+    app.add_handler(CommandHandler("trace", lambda u, c: wrapper(trace_cmd, u, c)))
+    app.add_handler(CommandHandler("report", lambda u, c: wrapper(report_cmd, u, c)))
+    app.add_handler(CommandHandler("toggle", lambda u, c: wrapper(toggle_cmd, u, c)))
+    app.add_handler(CommandHandler("ping", lambda u, c: wrapper(ping_cmd, u, c)))
+    app.add_handler(CommandHandler("node", lambda u, c: wrapper(node_cmd, u, c)))
+    app.add_handler(CommandHandler("traffic", lambda u, c: wrapper(traffic_cmd, u, c)))
+    app.add_handler(CommandHandler("alert", lambda u, c: wrapper(alert_cmd, u, c)))
+    
+    app.run_polling()
+
+if __name__ == "__main__":
+    init_db()
+    Thread(target=traffic_persistent_worker, daemon=True).start()
+    Thread(target=monitor_ssh_login, daemon=True).start()
+    Thread(target=cpu_load_guardian, daemon=True).start()
+    run_bot()
+EOF_PY
+}
+
+check_depends
+init_config
+
+# 拦截热更新传递的系统参数 (实现代码热覆盖与无缝重载)
+if [ "$1" == "--auto-update" ]; then
+    echo "🔄 正在为您重写核心引擎并重启底层守护服务..."
+    write_python_engine
+    restart_backend_service
+    echo "🎉 核心服务热重载完成！已顺利过渡到最新版本！"
+    sleep 2
+fi
+
+main_menu
