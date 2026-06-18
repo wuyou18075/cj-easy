@@ -90,7 +90,7 @@ try:
     url = f'https://api.telegram.org/bot{token}/sendMessage'
     payload = {
         'chat_id': admin_id,
-        'text': '🔔 *[控制面板核心链路双向握手验证]*\n\n恭喜！当前服务器已完全打通与您手机客户端的安全通信信道，指令交互通道现已全部【真成功】激活！',
+        'text': '🔔 *[面板核心链路验证]*\n\n安全通信信道已打通，控制指令交互现已成功激活！',
         'parse_mode': 'Markdown'
     }
     r2 = requests.post(url, json=payload, timeout=6)
@@ -184,32 +184,32 @@ refresh_dashboard() {
         ssh_fail_30d=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM ssh_history WHERE status='FAILED' AND time >= datetime('now', '-30 day');" 2>/dev/null)
     fi
 
-    local traffic_stats="0.00 GB / 无限制"
+    local traffic_stats="0.00 GB / 无限配额"
     if [ -f "$DB_PATH" ]; then
         local used_bytes=$(sqlite3 "$DB_PATH" "SELECT count FROM report_counter WHERE id=2;" 2>/dev/null)
         used_bytes=${used_bytes:-0}
         local used_gb=$(echo "scale=2; $used_bytes / 1024 / 1024 / 1024" | bc 2>/dev/null)
         
         if [ "$total_tf" -eq 0 ]; then
-            traffic_stats="${used_gb} GB / 无限制"
+            traffic_stats="${used_gb} GB / 无限配额"
         else
             local pct=$(echo "scale=1; ($used_bytes / ($total_tf * 1024 * 1024 * 1024)) * 100" | bc 2>/dev/null)
-            traffic_stats="${used_gb} GB / ${total_tf} GB (${pct}%) [预警阀值: ${alert_pct}%]"
+            traffic_stats="${used_gb} GB / ${total_tf} GB (${pct}%) [预警: ${alert_pct}%]"
         fi
     fi
 
-    local daily_status="🔴 已关闭"
-    if [ "$r_enabled" -eq 1 ]; then daily_status="🟢 已开启"; fi
+    local daily_status="🔴 关"
+    if [ "$r_enabled" -eq 1 ]; then daily_status="🟢 开"; fi
 
+    # 极简专业版 UI，绝对不换行，干练对齐
     echo "====================================================================="
-    echo "       🛡️  Debian 13 精简版 - 专属集群管理面板 (聚合大盘版)"
+    echo "           🛡️  Debian 13 精简版 - 专属集群主控面板"
     echo "====================================================================="
-    echo " 🔹 通讯端口: $port                  | 🔹 开机自启动: $autostart"
-    echo " 🔹 轮询间隔: ${interval} s                 | 🔹 TG连接状态: $tg_status"
-    echo " 🔹 日报状态: $daily_status              | 🔹 SSH默认分页: $p_size 条"
-    echo " 🔹 30天内密码错误次数: ${ssh_fail_30d} 次"
-    echo " 🔹 当月总流量配额状态: $traffic_stats"
-    echo " 🔹 长期CPU高负荷报警方案: 连续3次检测到超过 ${cpu_alert}% 触发紧急防死机预警"
+    echo " 🔹 通讯端口: $port           |  🔹 开机自启: $autostart"
+    echo " 🔹 轮询频率: ${interval} s               |  🔹 TG 状态 : $tg_status"
+    echo " 🔹 自动日报: $daily_status               |  🔹 日志分页: $p_size 条"
+    echo " 🔹 违规拦截: ${ssh_fail_30d} 次              |  🔹 CPU报警 : >${cpu_alert}% 负荷"
+    echo " 🔹 流量配额: $traffic_stats"
     echo "====================================================================="
     echo "  [1] 安装 / 卸载 / 重启 控制面引擎"
     echo "  [2] 查看/管理 集群从控服务器列表"
@@ -666,7 +666,7 @@ def run_benchmark(limit=4):
         speed_mbps = (speed_bps * 8) / (1024**2)
         
         results.append(f"● {item['name']}: `{speed_mbps:.2f} Mbps`\n  URL: `{item['url']}`")
-        time.sleep(1) # 单线程对网卡冲击不大，1秒间隔即可
+        time.sleep(1)
 
     res_str = "\n\n".join(results)
     return f"\n🚀 *单线程精细网速诊断* (测点数: {limit})\n\n{res_str}"
@@ -736,7 +736,7 @@ def get_system_status(is_tg=True):
     used_g = used_bytes / (1024**3)
     
     if total_g == 0:
-        tf_str = f"`{used_g:.2f}G` / `无限制`"
+        tf_str = f"`{used_g:.2f}G` / `无限`"
         alert_str = "未激活"
     else:
         pct = (used_g / total_g) * 100
@@ -746,7 +746,7 @@ def get_system_status(is_tg=True):
     disk_total_g = disk.total // (1024**3)
 
     if is_tg:
-        header = (f"● SSH失败: `{f_30} 次`\n"
+        header = (f"● SSH违规: `{f_30} 次`\n"
                   f"● 日报状态: {report_status}\n"
                   f"● 流量配额: {tf_str}\n"
                   f"● 预警阈值: `{alert_str}`\n\n")
@@ -772,21 +772,26 @@ def ping_test_sync():
     mob = subprocess.getoutput("ping -c 2 -q 211.138.180.2 | awk -F/ '/rtt/ {print $5}'")
     return tel, uni, mob
 
-def run_bot():
-    from telegram import Update
-    from telegram.ext import Application, CommandHandler, ContextTypes
-    
-    async def wrapper(func, update, context):
+# ================= 核心权限鉴权装饰器 (完美修复拦截失效问题) =================
+def restrict_auth(func):
+    async def wrapped(update, context):
         try:
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute("SELECT 1 FROM whitelist WHERE user_id=?", (str(update.effective_user.id),))
             auth = c.fetchone() is not None
             conn.close()
-            if auth: await func(update, context)
+            if auth:
+                await func(update, context)
         except Exception as err: 
-            print(f"Error in {func.__name__}: {err}")
+            print(f"Auth Blocked: {err}")
+    return wrapped
+# ==============================================================================
 
+def run_bot():
+    from telegram import Update
+    from telegram.ext import Application, CommandHandler, ContextTypes
+    
     async def start(u, c):
         conf = load_conf()
         m = (f"🛡️ 专属集群管理就绪 ({conf['VPS_NAME']})\n\n"
@@ -913,17 +918,18 @@ def run_bot():
     conf = load_conf()
     app = Application.builder().token(conf["BOT_TOKEN"]).build()
     
-    app.add_handler(CommandHandler("start", lambda u, c: wrapper(start, u, c)))
-    app.add_handler(CommandHandler("status", lambda u, c: wrapper(status_cmd, u, c)))
-    app.add_handler(CommandHandler("speed", lambda u, c: wrapper(speed_cmd, u, c)))
-    app.add_handler(CommandHandler("mtr", lambda u, c: wrapper(mtr_cmd, u, c)))
-    app.add_handler(CommandHandler("trace", lambda u, c: wrapper(trace_cmd, u, c)))
-    app.add_handler(CommandHandler("report", lambda u, c: wrapper(report_cmd, u, c)))
-    app.add_handler(CommandHandler("toggle", lambda u, c: wrapper(toggle_cmd, u, c)))
-    app.add_handler(CommandHandler("ping", lambda u, c: wrapper(ping_cmd, u, c)))
-    app.add_handler(CommandHandler("node", lambda u, c: wrapper(node_cmd, u, c)))
-    app.add_handler(CommandHandler("traffic", lambda u, c: wrapper(traffic_cmd, u, c)))
-    app.add_handler(CommandHandler("alert", lambda u, c: wrapper(alert_cmd, u, c)))
+    # 完美拦截：所有指令强制套上一层 restrict_auth 鉴权
+    app.add_handler(CommandHandler("start", restrict_auth(start)))
+    app.add_handler(CommandHandler("status", restrict_auth(status_cmd)))
+    app.add_handler(CommandHandler("speed", restrict_auth(speed_cmd)))
+    app.add_handler(CommandHandler("mtr", restrict_auth(mtr_cmd)))
+    app.add_handler(CommandHandler("trace", restrict_auth(trace_cmd)))
+    app.add_handler(CommandHandler("report", restrict_auth(report_cmd)))
+    app.add_handler(CommandHandler("toggle", restrict_auth(toggle_cmd)))
+    app.add_handler(CommandHandler("ping", restrict_auth(ping_cmd)))
+    app.add_handler(CommandHandler("node", restrict_auth(node_cmd)))
+    app.add_handler(CommandHandler("traffic", restrict_auth(traffic_cmd)))
+    app.add_handler(CommandHandler("alert", restrict_auth(alert_cmd)))
     
     app.run_polling()
 
