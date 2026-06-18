@@ -117,12 +117,6 @@ check_depends() {
         apt-get install -y python3 python3-pip iptables curl traceroute sqlite3 bc procps openssl mtr-tiny >/dev/null 2>&1
         pip3 install Flask requests python-telegram-bot psutil --break-system-packages --ignore-installed >/dev/null 2>&1
     fi
-
-    # 安装 NextTrace (测回程必备)
-    if ! command -v nexttrace &> /dev/null; then
-        echo "🌐 正在为您安装开源回程探测器 (NextTrace)..."
-        bash <(curl -fsSL https://nxtrace.org/nt) >/dev/null 2>&1
-    fi
 }
 
 init_config() {
@@ -171,7 +165,7 @@ try:
     elif msg_type == 'uninstall':
         text = f'🗑️ *[节点卸载通知]*\n\n主机 `{vps_name}` 的主控面板已彻底卸载，江湖再见！'
     elif msg_type == 'update':
-        text = f'🚀 *[无缝热重载完成]*\n\n主机 `{vps_name}` 已成功拉取最新代码并重启！\n\n🛡️ *专属集群管理就绪*\n\n/status - 提取服务器综合监控大盘\n/speed [节点数] - 触发单线程精细网速诊断\n/mtr [目标IP] - MTR 深度回程解析(带线路备注)\n/trace [目标IP] - 调用 NextTrace 智能测回程\n/report - 提取运维全貌日报\n/toggle - 翻转自动化日报开启状态\n/ping - 提取合肥三网骨干链路延迟\n/node - 提取节点配置文件内容\n/traffic <配额> - 设置本月流量预设(GB)\n/alert <阈值> - 设置流量预警线(百分比)'
+        text = f'🚀 *[无缝热重载完成]*\n\n主机 `{vps_name}` 已成功拉取最新代码并重启！\n\n🛡️ *专属集群管理就绪*\n\n/status - 提取综合大盘\n/speed [节点数] - 触发网速诊断\n/mtr [IP] - 深度回程解析\n/report - 提取运维日报\n/toggle - 翻转自动化日报\n/ping - 三网骨干链路延迟\n/node - 提取节点配置\n/traffic <配额> - 流量预设(GB)\n/alert <阈值> - 预警线(百分比)'
     
     requests.post(f'https://api.telegram.org/bot{token}/sendMessage', json={'chat_id': admin_id, 'text': text, 'parse_mode': 'Markdown'}, timeout=5)
 except: pass
@@ -229,7 +223,6 @@ refresh_dashboard() {
     local daily_status="🔴 关"
     if [ "$r_enabled" -eq 1 ]; then daily_status="🟢 开"; fi
 
-    # 极简专业版 UI，绝对不换行，干练对齐
     echo "====================================================================="
     echo "           🛡️  Debian 13 精简版 - 专属集群主控面板"
     echo "====================================================================="
@@ -248,13 +241,14 @@ refresh_dashboard() {
     echo "  [7] 查看当前面板各组件服务路径与文件分布"
     echo "  [8] 🔄 一键在线拉取最新代码并热更新面板服务"
     echo "  [9] 唤醒 TG 连通性测试并发送验证消息 (支持原地自愈绑定)"
+    echo "  [10] 🚀 本机执行 MTR 深度回程路由测试"
     echo "  [0] Security Exit"
     echo "====================================================================="
 }
 
 main_menu() {
     refresh_dashboard
-    read -p "请输入对应选项 [0-9]: " menu_num
+    read -p "请输入对应选项 [0-10]: " menu_num
     case "$menu_num" in
         1) menu_service ;;
         2) menu_nodes ;;
@@ -265,6 +259,7 @@ main_menu() {
         7) view_paths ;;
         8) update_panel ;;
         9) wake_tg_connection ;;
+        10) invoke_mtr_test ;;
         0) exit 0 ;;
         *) main_menu ;;
     esac
@@ -574,6 +569,20 @@ wake_tg_connection() {
     main_menu
 }
 
+invoke_mtr_test() {
+    clear
+    echo "====================================================================="
+    echo "       🛣️  MTR 深度回程路由测试 (调用后端解析引擎)"
+    echo "====================================================================="
+    read -p "请输入要测试的目标 IP (回车默认测试安徽移动 211.138.180.2): " mtr_ip
+    mtr_ip=${mtr_ip:-211.138.180.2}
+    echo ""
+    python3 ${PYTHON_SCRIPT} --mtr "$mtr_ip"
+    echo ""
+    read -p "测试完成，按回车键返回主菜单..."
+    main_menu
+}
+
 write_python_engine() {
 cat << 'EOF_PY' > ${CONFIG_DIR}/main.py
 import os, sys, time, json, sqlite3, datetime, requests, re, threading, asyncio, subprocess
@@ -661,7 +670,6 @@ def traffic_persistent_worker():
         except: pass
         time.sleep(5)
 
-# === 已完美找回: CPU 守护进程 ===
 def cpu_load_guardian():
     import psutil
     high_count = 0
@@ -685,7 +693,6 @@ def query_geo(ip):
     except: pass
     return "未知所在地"
 
-# === 已完美找回: SSH 防爆破监控器 ===
 def monitor_ssh_login():
     log_files = ["/var/log/auth.log", "/var/log/secure"]
     target_log = None
@@ -857,7 +864,6 @@ def ping_test_sync():
     mob = subprocess.getoutput("ping -c 2 -q 211.138.180.2 | awk -F/ '/rtt/ {print $5}'")
     return tel, uni, mob
 
-# ================= 核心权限鉴权装饰器 (完美修复拦截失效问题) =================
 def restrict_auth(func):
     async def wrapped(update, context):
         try:
@@ -871,7 +877,6 @@ def restrict_auth(func):
         except Exception as err: 
             print(f"Auth Blocked: {err}")
     return wrapped
-# ==============================================================================
 
 def run_bot():
     from telegram import Update
@@ -883,7 +888,6 @@ def run_bot():
              f"/status - 提取服务器综合监控大盘\n"
              f"/speed [节点数] - 触发单线程精细网速诊断\n"
              f"/mtr [目标IP] - MTR 深度回程解析(带线路备注)\n"
-             f"/trace [目标IP] - 调用 NextTrace 智能测回程\n"
              f"/report - 提取运维全貌日报\n"
              f"/toggle - 翻转自动化日报开启状态\n"
              f"/ping - 提取合肥三网骨干链路延迟\n"
@@ -905,41 +909,16 @@ def run_bot():
                 limit = max(1, min(4, val))
             except: pass
         await u.message.reply_text(f"⏱️ 正在调度单线程源站测速 (配置节点数: {limit})，请耐心等待...", parse_mode="Markdown")
-        
-        # 放入线程池执行，绝对不阻塞 TG 机器人主线程！
         loop = asyncio.get_running_loop()
         res = await loop.run_in_executor(None, run_benchmark, limit)
         await u.message.reply_text(res, parse_mode="Markdown")
 
     async def mtr_cmd(u, c):
-        target_ip = "211.138.180.2" # 默认安徽移动节点(常被中科大等使用)
+        target_ip = "211.138.180.2" 
         if c.args: target_ip = c.args[0].strip()
-        
         await u.message.reply_text(f"📡 正在执行 MTR 深度回程解析 (30 次发包)...\n*目标 IP:* `{target_ip}`\n_(预计耗时 15~20 秒，请稍候)_", parse_mode="Markdown")
-        
-        # 原生异步调用，绝不堵塞
         res = await parse_mtr_async(target_ip)
         await u.message.reply_text(f"🛣️ *MTR 回程诊断报告 ({target_ip})*\n\n{res}", parse_mode="Markdown")
-
-    async def trace_cmd(u, c):
-        target_ip = "211.138.180.2"
-        if c.args: target_ip = c.args[0].strip()
-        await u.message.reply_text(f"🌍 正在调用 NextTrace 智能追踪地图引擎...\n*目标 IP:* `{target_ip}`\n_(请稍候...)_", parse_mode="Markdown")
-        
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "nexttrace", "--fast-trace", target_ip,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await proc.communicate()
-            out = stdout.decode().strip()
-            if not out: out = "❌ NextTrace 获取失败，请检查 VPS 是否允许 ICMP/UDP 出站。"
-        except Exception as e:
-            out = f"❌ NextTrace 执行异常: {e}"
-        
-        fence = "`" * 3
-        await u.message.reply_text(f"{fence}text\n{out[:4000]}\n{fence}", parse_mode="Markdown")
 
     async def traffic_cmd(u, c):
         if not c.args:
@@ -1003,12 +982,10 @@ def run_bot():
     conf = load_conf()
     app = Application.builder().token(conf["BOT_TOKEN"]).build()
     
-    # 完美拦截：所有指令强制套上一层 restrict_auth 鉴权
     app.add_handler(CommandHandler("start", restrict_auth(start)))
     app.add_handler(CommandHandler("status", restrict_auth(status_cmd)))
     app.add_handler(CommandHandler("speed", restrict_auth(speed_cmd)))
     app.add_handler(CommandHandler("mtr", restrict_auth(mtr_cmd)))
-    app.add_handler(CommandHandler("trace", restrict_auth(trace_cmd)))
     app.add_handler(CommandHandler("report", restrict_auth(report_cmd)))
     app.add_handler(CommandHandler("toggle", restrict_auth(toggle_cmd)))
     app.add_handler(CommandHandler("ping", restrict_auth(ping_cmd)))
@@ -1019,6 +996,15 @@ def run_bot():
     app.run_polling()
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == '--mtr':
+        target_ip = sys.argv[2] if len(sys.argv) > 2 else "211.138.180.2"
+        print(f"📡 正在测试本机到 {target_ip} 的回程路由...")
+        print("_(默认发包 30 次，预计需要 15~20 秒，请耐心等待)_\n")
+        res = asyncio.run(parse_mtr_async(target_ip))
+        res_bash = res.replace('`', '')
+        print(res_bash)
+        sys.exit(0)
+
     init_db()
     Thread(target=traffic_persistent_worker, daemon=True).start()
     Thread(target=monitor_ssh_login, daemon=True).start()
