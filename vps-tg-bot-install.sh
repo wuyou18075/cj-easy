@@ -64,4 +64,3 @@ chmod +x start.sh
 ./start.sh
 echo "=================================================="
 EOF
-chmod +x /root/tg_vps_bot/manage.sh && cd /root/tg_vps_bot && ./manage.sh
