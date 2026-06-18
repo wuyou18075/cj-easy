@@ -61,7 +61,7 @@ except:
     echo "====================================================================="
 }
 
-# 高级网络与身份真成功双向校验阻断器 (已修复变量注入引起的 404 与语法错误)
+# 高级网络与身份真成功双向校验阻断器
 verify_tg_credentials() {
     local token="$1"
     local admin_id="$2"
@@ -128,10 +128,10 @@ init_config() {
     "ROLE": "MASTER",
     "BOT_TOKEN": "",
     "ADMIN_ID": "",
-    "VPS_NAME": "cnmb",
+    "VPS_NAME": "debian-node",
     "PORT": 59595,
     "POLL_INTERVAL": 5,
-    "TOTAL_TRAFFIC_GB": 1000,
+    "TOTAL_TRAFFIC_GB": 0,
     "TRAFFIC_ALERT_PCT": 80,
     "CPU_HIGH_LOAD_ALERT_PCT": 90,
     "REPORT_ENABLED": 1,
@@ -159,6 +159,7 @@ refresh_dashboard() {
     local port=$(read_json "PORT")
     local interval=$(read_json "POLL_INTERVAL")
     local total_tf=$(read_json "TOTAL_TRAFFIC_GB")
+    local alert_pct=$(read_json "TRAFFIC_ALERT_PCT")
     local cpu_alert=$(read_json "CPU_HIGH_LOAD_ALERT_PCT")
     local r_enabled=$(read_json "REPORT_ENABLED")
     local p_size=$(read_json "SSH_PAGE_SIZE")
@@ -177,13 +178,18 @@ refresh_dashboard() {
         ssh_fail_30d=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM ssh_history WHERE status='FAILED' AND time >= datetime('now', '-30 day');" 2>/dev/null)
     fi
 
-    local traffic_stats="0.00 GB / ${total_tf} GB (0.0%)"
+    local traffic_stats="0.00 GB / 无限制"
     if [ -f "$DB_PATH" ]; then
         local used_bytes=$(sqlite3 "$DB_PATH" "SELECT count FROM report_counter WHERE id=2;" 2>/dev/null)
         used_bytes=${used_bytes:-0}
         local used_gb=$(echo "scale=2; $used_bytes / 1024 / 1024 / 1024" | bc 2>/dev/null)
-        local pct=$(echo "scale=1; ($used_bytes / ($total_tf * 1024 * 1024 * 1024)) * 100" | bc 2>/dev/null)
-        traffic_stats="${used_gb} GB / ${total_tf} GB (${pct}%)"
+        
+        if [ "$total_tf" -eq 0 ]; then
+            traffic_stats="${used_gb} GB / 无限制"
+        else
+            local pct=$(echo "scale=1; ($used_bytes / ($total_tf * 1024 * 1024 * 1024)) * 100" | bc 2>/dev/null)
+            traffic_stats="${used_gb} GB / ${total_tf} GB (${pct}%) [超过 ${alert_pct}% 自动通知]"
+        fi
     fi
 
     local daily_status="🔴 已关闭"
@@ -196,7 +202,7 @@ refresh_dashboard() {
     echo " 🔹 轮询间隔: ${interval} s                 | 🔹 TG连接状态: $tg_status"
     echo " 🔹 日报状态: $daily_status              | 🔹 SSH默认分页: $p_size 条"
     echo " 🔹 30天内密码错误次数: ${ssh_fail_30d} 次"
-    echo " 🔹 当月总流量配额状态: $traffic_stats [超过80%自动通知]"
+    echo " 🔹 当月总流量配额状态: $traffic_stats"
     echo " 🔹 长期CPU高负荷报警方案: 连续3次检测到超过 ${cpu_alert}% 触发紧急防死机预警"
     echo "====================================================================="
     echo "  [1] 安装 / 卸载 / 重启 控制面引擎"
@@ -301,6 +307,11 @@ menu_service() {
             read -p "配置接收端口 (可以直接敲回车使用随机范围 58000-60000 -> $rand_port): " t_port
             t_port=${t_port:-$rand_port}
             if [[ "$t_port" =~ ^[0-9]+$ ]]; then write_json "PORT" "$t_port"; else write_json "PORT" "$rand_port"; fi
+            
+            # 加入无限流量预设询问
+            read -p "请输入每月总流量配额 (GB, 回车默认无限流量): " t_traffic
+            t_traffic=${t_traffic:-0}
+            if [[ "$t_traffic" =~ ^[0-9]+$ ]]; then write_json "TOTAL_TRAFFIC_GB" "$t_traffic"; else write_json "TOTAL_TRAFFIC_GB" "0"; fi
             
             read -p "是否注册为开机自启动系统服务? [y/n, 回车=是]: " sys_choice
             sys_choice=${sys_choice:-"y"}
@@ -413,7 +424,7 @@ adjust_freq() { clear; read -p "设置全局轮询频率 (秒): " f_sec; write_j
 menu_monitor() {
     clear
     echo "=== [6] 高级监控中心 ==="
-    echo "  [1] 本机全维度监控 (含中国合肥/南京双骨干网测速)"
+    echo "  [1] 本机全维度监控 (含中国/海外多骨干网测速)"
     echo "  [2] 查看 SSH 登录历史审计"
     echo "  [3] 切换自动化日报状态"
     echo "  [4] 国内安徽三网延迟测定"
@@ -469,13 +480,10 @@ update_panel() {
     local SCRIPT_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/vps-tg-bot-install.sh"
     local TMP_SH="/tmp/vps-tg-bot-update.sh"
     
-    # 强制拉取避免缓存
     curl -fsSL "${SCRIPT_URL}?v=$(date +%s)" -o "$TMP_SH"
     
     if [ $? -eq 0 ] && [ -s "$TMP_SH" ]; then
         chmod +x "$TMP_SH"
-        
-        # 覆盖原本的安装脚本
         cp -f "$TMP_SH" "${CONFIG_DIR}/test.sh" 2>/dev/null
         cp -f "$TMP_SH" "$0" 2>/dev/null
         
@@ -485,8 +493,6 @@ update_panel() {
         
         echo "✅ 新脚本拉取完毕，正在无缝重载并更新 Python 核心引擎..."
         sleep 2
-        
-        # 使用 exec 彻底替换当前 Bash 进程，并带上参数直接触发静默热更新
         exec bash "${CONFIG_DIR}/test.sh" --auto-update
     else
         echo "❌ 拉取失败，请检查与 GitHub 的网络连通性！"
@@ -554,6 +560,8 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS report_counter (id INTEGER PRIMARY KEY, count INTEGER DEFAULT 0)''')
     c.execute("INSERT OR IGNORE INTO report_counter (id, count) VALUES (1, 0)")
     c.execute("INSERT OR IGNORE INTO report_counter (id, count) VALUES (2, 0)")
+    # id=3 is net raw total, id=4 is traffic alert month tracker
+    c.execute("INSERT OR IGNORE INTO report_counter (id, count) VALUES (4, 0)")
     conf = load_conf()
     c.execute("INSERT OR IGNORE INTO whitelist (user_id, username, added_time) VALUES (?, ?, ?)", (str(conf["ADMIN_ID"]), "Main_Admin", datetime.datetime.now().strftime("%Y-%m-%d")))
     conn.commit()
@@ -567,6 +575,7 @@ def traffic_persistent_worker():
             current_raw = net_io.bytes_sent + net_io.bytes_recv
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
+            
             c.execute("SELECT count FROM report_counter WHERE id=3")
             row_last = c.fetchone()
             if not row_last:
@@ -576,7 +585,30 @@ def traffic_persistent_worker():
                 last_raw = row_last[0]
                 delta = current_raw - last_raw if current_raw >= last_raw else current_raw
                 c.execute("UPDATE report_counter SET count=? WHERE id=3", (current_raw,))
+            
             c.execute("UPDATE report_counter SET count = count + ? WHERE id=2", (delta,))
+            
+            # --- 🚀 完美闭环：实时流量报警监控器 ---
+            conf = load_conf()
+            total_g = conf.get("TOTAL_TRAFFIC_GB", 0)
+            alert_pct = conf.get("TRAFFIC_ALERT_PCT", 80)
+            
+            if total_g > 0 and alert_pct > 0:
+                c.execute("SELECT count FROM report_counter WHERE id=2")
+                used_bytes = c.fetchone()[0]
+                used_g = used_bytes / (1024**3)
+                pct = (used_g / total_g) * 100
+                
+                if pct >= alert_pct:
+                    current_month = datetime.datetime.now().month
+                    c.execute("SELECT count FROM report_counter WHERE id=4")
+                    alert_month = c.fetchone()[0]
+                    
+                    if alert_month != current_month:
+                        txt = f"⚠️ *[超额警告] 流量预警触发！*\n\n您的主机 `{conf['VPS_NAME']}` 当月流量已使用达到 `{pct:.1f}%`\n● 已用/总量: `{used_g:.2f}G / {total_g}G`"
+                        requests.post(f"https://api.telegram.org/bot{conf['BOT_TOKEN']}/sendMessage", data={"chat_id": conf['ADMIN_ID'], "text": txt, "parse_mode": "Markdown"})
+                        c.execute("UPDATE report_counter SET count=? WHERE id=4", (current_month,))
+            
             conn.commit()
             conn.close()
         except: pass
@@ -590,14 +622,16 @@ def query_geo(ip):
     return "未知所在地"
 
 def run_benchmark():
-    # 动态核心分配
+    # 动态获取核心数量，如果是1核最高给到2线程，多了不仅卡爆还会反作用负优化
     core_count = os.cpu_count() or 1
-    threads = 2 if core_count <= 1 else core_count
+    threads = 2 if core_count == 1 else min(4, core_count)
 
+    # 替换成了更大更有说服力的文件，抛弃瞬间下完的小文件，测速更准
     targets = {
-        "南京大学节点": "https://mirrors.nju.edu.cn/debian/ls-lR.gz",
-        "合肥科大节点": "https://mirrors.ustc.edu.cn/debian/ls-lR.gz",
-        "洛杉矶海外节点": "http://cachefly.cachefly.net/10mb.test"
+        "南京大学节点": "https://mirrors.nju.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso",
+        "合肥科大节点": "https://mirrors.ustc.edu.cn/debian-cd/current/amd64/iso-cd/debian-mac-12.5.0-amd64-netinst.iso",
+        "东京优质节点": "http://speedtest.tokyo2.linode.com/100MB-tokyo2.bin",
+        "美国洛杉矶节点": "http://speedtest.la.linode.com/100MB-la.bin"
     }
 
     def download_test(url, res_list):
@@ -605,7 +639,7 @@ def run_benchmark():
             t0 = time.time()
             r = requests.get(url, timeout=4, stream=True)
             sz = 0
-            for chunk in r.iter_content(chunk_size=1024*32):
+            for chunk in r.iter_content(chunk_size=1024*64):
                 if chunk: sz += len(chunk)
                 if time.time() - t0 > 3: break
             dur = time.time() - t0
@@ -619,7 +653,7 @@ def run_benchmark():
         download_test(url, s_res)
         s_speed = (s_res[0] * 8) / (1024**2) if s_res else 0
 
-        # 防网卡拥堵强制睡眠3秒
+        # 防网卡拥堵强制睡眠 3 秒
         time.sleep(3)
 
         # 多线程测速
@@ -632,36 +666,44 @@ def run_benchmark():
         for t in th_list: t.join()
         m_speed = (sum(m_res) * 8) / (1024**2)
 
-        # 间隔3秒，为下一个节点让路
+        # 再次间隔 3 秒，为下一个节点让路防死锁
         time.sleep(3)
 
-        # 完美对齐你要的排版格式
-        results.append(f"{name} :单线程: {s_speed:.2f} Mbps,多线程: {m_speed:.2f} Mbps")
+        # 全面对齐排版：● 节点名称: 单线程 / 多线程
+        results.append(f"● {name}: {s_speed:.2f} Mbps / {m_speed:.2f} Mbps")
 
     res_str = "\n".join(results)
-    return f"\n🚀 国内外网络压榨测速 (本机: {core_count}核, 动态并发: {threads}线程)\n{res_str}"
+    return f"\n🚀 国内外网络压榨测速\n             单线程 / 多线程 ({threads}并发)\n{res_str}"
 
 def get_system_status():
     import psutil
     conf = load_conf()
+    core_count = os.cpu_count() or 1
     cpu_usage = psutil.cpu_percent(interval=0.2)
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage('/')
+    
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT count FROM report_counter WHERE id=2")
     used_bytes = c.fetchone()[0]
     conn.close()
-    total_g = conf.get("TOTAL_TRAFFIC_GB", 1000)
-    used_g = used_bytes / (1024**3)
-    pct = (used_g / total_g) * 100
     
-    # 按照你要求的干净格式输出
+    total_g = conf.get("TOTAL_TRAFFIC_GB", 0)
+    used_g = used_bytes / (1024**3)
+    
+    # 无限流量友好显示
+    if total_g == 0:
+        tf_str = f"{used_g:.2f}G / 无限制 (流量报警不触发)"
+    else:
+        pct = (used_g / total_g) * 100
+        tf_str = f"{used_g:.2f}G / {total_g}G ({pct:.1f}%)"
+    
     return (f"🖥️ [{conf['VPS_NAME']}] 服务器监控快照\n\n"
-            f"● CPU 使用率: {cpu_usage}% \n"
+            f"● CPU 使用率: {cpu_usage}% ({core_count}核)\n"
             f"● 内存损耗: {mem.percent}% ({mem.used // (1024**2)}M / {mem.total // (1024**2)}M)\n"
             f"● 硬盘结余: {disk.percent}% ({disk.free // (1024**3)}G)\n"
-            f"● 流量配额: {used_g:.2f}G / {total_g}G ({pct:.1f}%)\n")
+            f"● 流量配额: {tf_str}\n")
 
 def cpu_load_guardian():
     import psutil
@@ -745,12 +787,46 @@ def run_bot():
 
     async def start(u, c):
         conf = load_conf()
-        m = f"🛡️ 专属集群管理就绪 ({conf['VPS_NAME']})\n\n/status - 实时快照与国内外多节点测速\n/report - 提取运维日报\n/toggle - 翻转日报开启状态\n/ping - 安徽三网骨干链路诊断\n/node - 提取节点配置"
+        # 移除了 bullet 点号，并确保行首斜杠能直接点击 (Telegram 原生高亮蓝字可点逻辑)
+        m = (f"🛡️ 专属集群管理就绪 ({conf['VPS_NAME']})\n\n"
+             f"/status - 实时快照与国内外多节点测速\n"
+             f"/report - 提取运维日报\n"
+             f"/toggle - 翻转日报开启状态\n"
+             f"/ping - 安徽三网骨干链路诊断\n"
+             f"/node - 提取节点配置\n"
+             f"/traffic <配额> - 设置本月流量预设(GB)\n"
+             f"/alert <阈值> - 设置流量预警线(百分比)")
         await u.message.reply_text(m)
 
     async def status_cmd(u, c):
-        await u.message.reply_text("⏱️ 正在实时调度国内骨干网与海外多线程测速，请稍候（节点间已增加延时防拥堵）...")
+        await u.message.reply_text("⏱️ 正在实时调度多节点双轨并发测速...\n\n(为防止网卡死锁，节点间已增加底层防拥堵降温延时，请耐心等待)")
         await u.message.reply_text(get_system_status() + run_benchmark())
+
+    async def traffic_cmd(u, c):
+        if not c.args:
+            await u.message.reply_text("ℹ️ 请在指令后加上数字（GB）。例如设置 89G:\n`/traffic 89`\n设置无限流量请输入 0:\n`/traffic 0`", parse_mode="Markdown")
+            return
+        try:
+            val = int(c.args[0].lower().replace('g', ''))
+            conf = load_conf()
+            conf["TOTAL_TRAFFIC_GB"] = val
+            with open(CONF_PATH, "w") as f: json.dump(conf, f, indent=4)
+            await u.message.reply_text(f"✅ 每月总流量配额已更新为: {'无限流量' if val == 0 else f'{val} GB'}")
+        except:
+            await u.message.reply_text("❌ 格式错误，无法识别。例如: `/traffic 89`", parse_mode="Markdown")
+
+    async def alert_cmd(u, c):
+        if not c.args:
+            await u.message.reply_text("ℹ️ 请在指令后加上数字（百分比）。例如设置 80%:\n`/alert 80`", parse_mode="Markdown")
+            return
+        try:
+            val = int(c.args[0].replace('%', ''))
+            conf = load_conf()
+            conf["TRAFFIC_ALERT_PCT"] = val
+            with open(CONF_PATH, "w") as f: json.dump(conf, f, indent=4)
+            await u.message.reply_text(f"✅ 流量预警百分比已更新为: {val}%")
+        except:
+            await u.message.reply_text("❌ 格式错误，无法识别。例如: `/alert 80`", parse_mode="Markdown")
 
     async def report_cmd(u, c): await u.message.reply_text(build_report())
 
@@ -790,6 +866,11 @@ def run_bot():
     app.add_handler(CommandHandler("toggle", lambda u, c: wrapper(toggle_cmd, u, c)))
     app.add_handler(CommandHandler("ping", lambda u, c: wrapper(ping_cmd, u, c)))
     app.add_handler(CommandHandler("node", lambda u, c: wrapper(node_cmd, u, c)))
+    
+    # 新增的两个底层控制命令注册
+    app.add_handler(CommandHandler("traffic", lambda u, c: wrapper(traffic_cmd, u, c)))
+    app.add_handler(CommandHandler("alert", lambda u, c: wrapper(alert_cmd, u, c)))
+    
     app.run_polling()
 
 if __name__ == "__main__":
