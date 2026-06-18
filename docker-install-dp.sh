@@ -1,16 +1,15 @@
 #!/bin/bash
 
 # ==============================================================================
-# 脚本名称: dp (带版本号完美对齐版)
+# 脚本名称: docker-install-dp.sh (GitHub 远程专供完整版)
 # 系统支持: Debian 13 (Trixie)
+# 优化特性: 完美支持远程 bash <(curl ...) 挂载执行，快捷键注册绝不失效
 # ==============================================================================
 
 if [ "$EUID" -ne 0 ]; then
     echo -e "\033[31m错误：请使用 root 权限运行此脚本！\033[0m"
     exit 1
 fi
-
-SCRIPT_PATH=$(readlink -f "$0")
 
 # 检查当前目录下是否存在 compose 配置文件
 check_compose_file() {
@@ -28,7 +27,6 @@ get_docker_status() {
         if ! systemctl is-active --quiet docker; then
             echo -e "\033[33m未启动(已安装)\033[0m"
         else
-            # 提取 Docker 版本号，例如 27.1.1
             local version
             version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || docker -v | awk '{print $3}' | tr -d ',')
             echo -e "\033[32m正在运行(v${version})\033[0m"
@@ -98,7 +96,6 @@ declare -a GLOBAL_CMDS=(
     "docker image prune            | 清理本地所有虚悬镜像（即标签为 <none> 的镜像）"
 )
 
-# 核心函数：无编号随机抽取 5 条显示
 show_education_commands() {
     echo -e "\n\033[36m💡 每日高频 Docker 命令速学 (随机抽取 5 条):\033[0m"
     local rand_indices
@@ -112,7 +109,6 @@ show_education_commands() {
     done
 }
 
-# 核心函数：展示全部 50 条内置命令
 list_all_50_commands() {
     clear
     echo "=== 内置 50 条 Docker 命令大盘点 ==="
@@ -278,9 +274,10 @@ while true; do
             echo -e "\n[工具箱留空区] 安全加固与优化功能开发中..." 
             ;;
         6) 
-            ln -sf "$SCRIPT_PATH" /usr/local/bin/dp
+            echo "正在通过您的远程链接下载并注册全局快捷键 'dp'..."
+            curl -fsSL "https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-install-dp.sh" -o /usr/local/bin/dp
             chmod +x /usr/local/bin/dp
-            echo -e "\n\033[32m🎉 已成功注册！以后可在任何地方直接输入 'dp' 或 'dp -f' 运行。\033[0m"
+            echo -e "\n\033[32m🎉 注册并同步成功！以后可在任何路径直接输入 'dp' 或 'dp -f' 运行。\033[0m"
             ;;
         9)
             list_all_50_commands
