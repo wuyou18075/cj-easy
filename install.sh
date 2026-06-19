@@ -14,8 +14,11 @@ ONLINE_SCRIPT_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/ins
 LOCAL_SCRIPT_PATH="/usr/local/bin/cj"
 NG_BACKUP_DIR="/cj/temp/nginx"
 NG_SSL_BACKUP_DIR="/cj/temp/nginx/ssl"
-KOMARI_DIR="/cj/dockercompose"
-KOMARI_YML_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-compose-tools.yml"
+
+# 动态远程脚本变量
+REMOTE_SYS_TOOL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/system-tool.sh"
+REMOTE_KOMARI="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-Komari.sh"
+REMOTE_BBR3="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/bbr3-install.sh"
 
 # 更新函数
 perform_update() {
@@ -61,157 +64,6 @@ check_acme_env() {
     if [ ! -f "$HOME/.acme.sh/acme.sh" ]; then
         curl https://get.acme.sh | sh -s email=my@av.com
     fi
-}
-
-# 20) 基础系统初始化运维专属菜单 (完全重构版)
-menu_system_initialization() {
-    while true; do
-        clear
-        echo -e "${C_BLUE}⚡ 系统信息工具${C_RESET}"
-        echo -e "日期: $(date "+%Y-%m-%d %H:%M:%S")"
-        echo -e "${LINE_GRAY}"
-        echo -e "1) 基础工具安装"
-        echo -e "2) 改主机名"
-        echo -e "3) 应用北京时间"
-        echo -e "0) 返回上一层菜单"
-        echo -e "${LINE_GRAY}"
-        read -p "请注入系统子项操作编号: " SYS_OPT
-
-        if [ "$SYS_OPT" == "0" ] || [ -z "$SYS_OPT" ]; then
-            break
-        fi
-
-        if [ "$SYS_OPT" == "1" ]; then
-            while true; do
-                clear
-                echo -e "${C_BLUE}📦 常用运维工具环境看板${C_RESET}"
-                echo -e "${LINE_GRAY}"
-                
-                # 定义工具阵列
-                TOOLS_LIST=("sudo" "curl" "git" "tar" "wget" "unzip")
-                TOOLS_STATUS=()
-                
-                # 动态探查上色逻辑
-                for idx in "${!TOOLS_LIST[@]}"; do
-                    T_NAME="${TOOLS_LIST[$idx]}"
-                    if command -v "$T_NAME" &> /dev/null; then
-                        TOOLS_STATUS[$idx]="INSTALLED"
-                        echo -e " $((idx+1))) [${C_GREEN}已安装${C_RESET}] $T_NAME"
-                    else
-                        TOOLS_STATUS[$idx]="MISSING"
-                        echo -e " $((idx+1))) [${C_YELLOW}未安装${C_RESET}] $T_NAME"
-                    fi
-                done
-                
-                echo -e "${LINE_GRAY}"
-                echo -e "1) 启动全量工具包一件深度部署"
-                echo -e "2) 自由指定工具编号个性化自由组装部署"
-                echo -e "0) 返回系统管理上级菜单"
-                echo -e "${LINE_GRAY}"
-                read -p "请选部署模式: " INS_OPT
-                
-                if [ "$INS_OPT" == "0" ] || [ -z "$INS_OPT" ]; then
-                    break
-                fi
-                
-                if [ "$INS_OPT" == "1" ]; then
-                    echo -e "${C_CYAN}⏳ 正在同步更新容器软件存储库并拉取全量依赖...${C_RESET}"
-                    sudo apt-get update -y && sudo apt-get install -y sudo curl git tar wget unzip
-                    echo -e "${C_GREEN}✅ 全量工具箱环境构筑洗礼完毕！${C_RESET}"
-                    read -p "回车刷新状态..." temp
-                elif [ "$INS_OPT" == "2" ]; then
-                    read -p "请输入欲部署的工具编号 (多选用空格或逗号隔开，例: 2,3,6): " CHOOSE_NUMS
-                    # 将逗号标准化转为空格
-                    CHOOSE_NUMS=$(echo "$CHOOSE_NUMS" | tr ',' ' ')
-                    INSTALL_TARGETS=""
-                    
-                    for num in $CHOOSE_NUMS; do
-                        if [[ "$num" =~ ^[1-6]$ ]]; then
-                            TARGET_NAME="${TOOLS_LIST[$((num-1))]}"
-                            INSTALL_TARGETS="$INSTALL_TARGETS $TARGET_NAME"
-                        fi
-                    done
-                    
-                    if [ -n "$INSTALL_TARGETS" ]; then
-                        echo -e "${C_CYAN}⏳ 正在按需装载以下指定工具组件: $INSTALL_TARGETS ...${C_RESET}"
-                        sudo apt-get update -y && sudo apt-get install -y $INSTALL_TARGETS
-                        echo -e "${C_GREEN}✅ 指定组件单元个性化部署完成。${C_RESET}"
-                    else
-                        echo -e "${C_GRAY}❌ 未检测到合规的数字编号，未执行任何改动。${C_RESET}"
-                    fi
-                    read -p "回车刷新状态..." temp
-                fi
-            done
-        elif [ "$SYS_OPT" == "2" ]; then
-            clear
-            echo -e "${C_BLUE}🔧 交互式系统主机名安全合规改写${C_RESET}"
-            echo -e "${LINE_GRAY}"
-            echo -e "当前主机名称: $(hostname)"
-            echo -e "${LINE_GRAY}"
-            
-            while true; do
-                read -p "请输入您拟定设定的全新主机名 (必须输入): " NEW_HOSTNAME
-                # 去除前后空格
-                NEW_HOSTNAME=$(echo "$NEW_HOSTNAME" | xargs)
-                
-                if [ -z "$NEW_HOSTNAME" ]; then
-                    echo -e "${C_GRAY}❌ 报错：主机名称绝对不允许为空，请重新判定！${C_RESET}"
-                    continue
-                fi
-                
-                # 遵循 FQDN 规则：只允许字母、数字、点和横杠，且不能以横杠或点开头结尾
-                if [[ ! "$NEW_HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$ ]] && [[ ! "$NEW_HOSTNAME" =~ ^[a-zA-Z0-9]$ ]]; then
-                    echo -e "${C_GRAY}❌ 报错：主机名存在非法字符！只允许字母、数字、点号(.)和横杠(-)${C_RESET}"
-                    continue
-                fi
-                break
-            done
-            
-            echo -e "${C_CYAN}⏳ 正在物理锁死系统内核主机名并改写网络本地域名映射拓扑...${C_RESET}"
-            
-            # 【核心报错修复点】: 必须先在内核知道切换动作前，将 IP 解析注入到本地 hosts，完全避开 sudo 报错警告
-            sudo sed -i "/127.0.0.1/s/\b$NEW_HOSTNAME\b//g" /etc/hosts
-            sudo sed -i "/::1/s/\b$NEW_HOSTNAME\b//g" /etc/hosts
-            echo "127.0.0.1 $NEW_HOSTNAME" | sudo tee -a /etc/hosts > /dev/null
-            echo "::1 $NEW_HOSTNAME" | sudo tee -a /etc/hosts > /dev/null
-            
-            # 此时再修改内核主机名，后续执行任何 sudo 命令都拥有完整的就绪映射环境
-            sudo hostnamectl set-hostname "$NEW_HOSTNAME"
-            
-            echo -e "${C_GREEN}✅ 物理改写生效，以下为当前最新 /etc/hosts 局部拓扑截面：${C_RESET}"
-            tail -n 5 /etc/hosts
-            echo -e "${LINE_GRAY}"
-            echo -e "${C_CYAN}👉 准备就绪。正在为您重置刷新当前宿主终端 Shell 视窗环境...${C_RESET}"
-            sleep 2
-            exec bash
-        elif [ "$SYS_OPT" == "3" ]; then
-            clear
-            echo -e "${C_BLUE}⏳ 正在重构底层时间服务框架...${C_RESET}"
-            echo -e "${LINE_GRAY}"
-            
-            # 强制设定时区为亚洲/上海
-            sudo timedatectl set-timezone Asia/Shanghai
-            
-            # 智能判定体系架构保障组件
-            if command -v apt-get &> /dev/null; then
-                sudo apt-get update -y && sudo apt-get install -y systemd-timesyncd
-                sudo timedatectl set-ntp true
-                sudo systemctl restart systemd-timesyncd
-            elif command -v yum &> /dev/null; then
-                sudo yum install -y chrony
-                sudo systemctl enable --now chronyd
-                sudo chronyc sources -v
-            fi
-            
-            echo -e "${C_CYAN}🔄 触发底层时钟网络校准同步锁...${C_RESET}"
-            sleep 1.5
-            echo -e "${C_GREEN}🎉 系统北京时间校准大功告成！当前最新时间参数：${C_RESET}"
-            echo -e "${LINE_GRAY}"
-            date
-            echo -e "${LINE_GRAY}"
-            read -p "回车返回上层菜单..." temp
-        fi
-    done
 }
 
 # 证书管理二级菜单
@@ -529,7 +381,6 @@ menu_nginx_management() {
 
                 sudo mkdir -p /etc/nginx/conf.d
                 
-                # 改用标准 echo 构建反代配置文件，规避 cat << EOF
                 sudo rm -f "$CONF_FILE_PATH"
                 echo "server {" | sudo tee -a "$CONF_FILE_PATH" > /dev/null
                 echo "    listen $CUSTOM_HTTP;" | sudo tee -a "$CONF_FILE_PATH" > /dev/null
@@ -720,118 +571,21 @@ menu_network_tuning() {
     fi
 }
 
-# Komari 探针自动化模块
-menu_komari_probe() {
-    while true; do
-        clear
-        echo -e "${C_BLUE}⚡ Komari 自动化服务监控面板${C_RESET}"
-        echo -e "${LINE_GRAY}"
-        echo -e "1) 一键拉取部署安装"
-        echo -e "2) 热拉取最新镜像更新"
-        echo -e "3) 阻断并彻底卸载服务"
-        echo -e "4) 独立安全归类备份配置文件及项目资产"
-        echo -e "0) 返回上一层"
-        echo -e "${LINE_GRAY}"
-        read -p "选择探针控制令: " KO_OPT
-
-        if [ "$KO_OPT" == "0" ] || [ -z "$KO_OPT" ]; then break; fi
-
-        if [ "$KO_OPT" == "1" ]; then
-            echo "⏳ 正在初始化基础物理拓扑目录..."
-            sudo mkdir -p "$KOMARI_DIR/data"
-            echo "⏳ 正在同步拉取云端工具库模块..."
-            curl -s -L "$KOMARI_YML_URL" > "$KOMARI_DIR/docker-compose-tools.yml"
-            
-            if [ ! -s "$KOMARI_DIR/docker-compose-tools.yml" ]; then
-                echo "❌ 错误：拉取核心模块失败，请检查网络通路！"; sleep 2; continue
-            fi
-
-            read -p "🔑 请设置系统管理员初始用户名: " KO_USER
-            read -p "🔑 请设置系统管理员初始密码: " KO_PASS
-            [ -z "$KO_USER" ] && KO_USER="admin"
-            [ -z "$KO_PASS" ] && KO_PASS="komari_secure_pwd"
-
-            sed -i "s/ADMIN_USERNAME=.*/ADMIN_USERNAME=$KO_USER/g" "$KOMARI_DIR/docker-compose-tools.yml"
-            sed -i "s/ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$KO_PASS/g" "$KOMARI_DIR/docker-compose-tools.yml"
-            sed -i "s|-\s\./komari:|- ./data:|g" "$KOMARI_DIR/docker-compose-tools.yml"
-
-            echo "🚀 正在拉起编排多路容器群生态..."
-            docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" up -d
-            echo -e "${C_GREEN}🎉 安装部署全部完成！${C_RESET}"; sleep 1.5
-
-        elif [ "$KO_OPT" == "2" ]; then
-            if [ "$(docker ps -a --filter "name=komari" --format "{{.Names}}")" ]; then
-                echo "⏳ 正在通过容器名 komari 热追踪拉取最新镜像流..."
-                docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" pull
-                docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" up -d
-                echo -e "${C_GREEN}✅ 探针群落热升级刷新完成。${C_RESET}"
-            else
-                echo "❌ 错误：未在系统内检索到名为 komari 的活跃容器，请先安装！"
-            fi
-            sleep 1.5
-
-        elif [ "$KO_OPT" == "3" ]; then
-            if [ "$(docker ps -a --filter "name=komari" --format "{{.Names}}")" ]; then
-                echo "🚨 正在彻底摧毁并注销该探针服务生态..."
-                docker compose -f "$KOMARI_DIR/docker-compose-tools.yml" down -v
-                sudo rm -f "$KOMARI_DIR/docker-compose-tools.yml"
-                echo -e "${C_GREEN}✅ 服务彻底清除销毁。${C_RESET}"
-            else
-                echo "❌ 系统内未发现运行中的 komari 监控实例。"
-            fi
-            sleep 1.5
-
-        elif [ "$KO_OPT" == "4" ]; then
-            if [ "$(docker ps -a --filter "name=komari" --format "{{.Names}}")" ]; then
-                echo -e "${C_YELLOW}⚠️  安全隐患提示：明文密码备份到本地归档文件中可能存在安全泄露风险。${C_RESET}"
-                read -p "❓ 是否确认将当前管理员账号和密码写入备份归档？(回车默认不备份) [y/N]: " IS_PWD_BAK
-                [ -z "$IS_PWD_BAK" ] && IS_PWD_BAK="n"
-
-                echo "⏳ 正在通过容器名匹配进行物理集群资产冷备份..."
-                BACKUP_TAR="/cj/temp/komari_bak_$(date +%Y%m%d%H%M%S).tar.gz"
-                sudo mkdir -p /cj/temp
-                
-                TMP_BAK_DIR="/tmp/komari_bak_dir"
-                sudo rm -rf "$TMP_BAK_DIR" && mkdir -p "$TMP_BAK_DIR"
-                
-                if [ "$IS_PWD_BAK" == "y" ] || [ "$IS_PWD_BAK" == "Y" ]; then
-                    EXT_USER=$(grep "ADMIN_USERNAME=" "$KOMARI_DIR/docker-compose-tools.yml" | cut -d'=' -f2)
-                    EXT_PASS=$(grep "ADMIN_PASSWORD=" "$KOMARI_DIR/docker-compose-tools.yml" | cut -d'=' -f2)
-                    echo -e "【Komari 凭证备份】\n用户名: $EXT_USER\n密码: $EXT_PASS" > "$TMP_BAK_DIR/credentials.txt"
-                fi
-
-                cp "$KOMARI_DIR/docker-compose-tools.yml" "$TMP_BAK_DIR/"
-                cp -r "$KOMARI_DIR/data" "$TMP_BAK_DIR/" 2>/dev/null
-
-                tar -czf "$BACKUP_TAR" -C "$TMP_BAK_DIR" . 2>/dev/null
-                sudo rm -rf "$TMP_BAK_DIR"
-
-                echo -e "${C_GREEN}🎉 备份完全成功！${C_RESET}"
-                echo -e "📦 物理打包压缩资产锁留存绝对路径:\n👉 ${C_CYAN}$BACKUP_TAR${C_RESET}"
-            else
-                echo "❌ 无法执行备份：系统底层未通过容器名检索到活跃的 komari 项目结构。"
-            fi
-            read -p "回车继续..." temp
-        fi
-    done
-}
-
 # 全局主菜单循环
 while true; do
     clear
     echo -e "${C_BLUE}⚡ cj 全能系统管理与证书脚本${C_RESET}"
     echo -e "${LINE_GRAY}"
     echo -e "1) 查询当前基础系统现状"
-    echo -e "2) 在线更新本地脚本 ${C_YELLOW}⭐${C_RESET}"
-    echo -e "3) Nginx 核心矩阵服务管理 ${C_YELLOW}⭐${C_RESET}"
-    echo -e "4) acme.sh 自动化证书管家 ${C_YELLOW}⭐${C_RESET}"
-    echo -e "5) BBR3 内核及传输层安装 (占位)"
-    echo -e "6) Network 内核吞吐优化 ${C_YELLOW}⭐${C_RESET}"
-    echo -e "7) 一键分布式轻量 SB (占位)"
-    echo -e "8) Docker 全栈容器管理 (占位)"
-    echo -e "9) Komari 服务可用性探针 ${C_YELLOW}⭐${C_RESET}"
-    echo -e "20) 基础系统初始化运维 ${C_YELLOW}⭐${C_RESET}"
-    echo -e "98) 全局注册本地快捷命令 cj"
+    echo -e "2) 系统初始化 ⭐"
+    echo -e "3) 系统优化 (占位置)"
+    echo -e "4) Nginx 核心矩阵服务管理 ⭐"
+    echo -e "5) acme.sh 自动化证书管家 ⭐"
+    echo -e "6) BBR3 内核及传输层安装 (占位)"
+    echo -e "7) Network 内核吞吐优化 ⭐"
+    echo -e "8) Komari 服务可用性探针 ⭐"
+    echo -e "97) 注册快捷命令 cj"
+    echo -e "98) 更新本地脚本 ⭐"
     echo -e "99) 强力完全卸载此脚本"
     echo -e "0) 安全退出"
     echo -e "${LINE_GRAY}"
@@ -849,19 +603,28 @@ while true; do
             echo -e "${LINE_GRAY}"
             read -p "按回车返回主菜单..." temp
             ;;
-        2) perform_update ;;
-        3) menu_nginx_management ;;
-        4) menu_certificate_management ;;
-        6) menu_network_tuning ;;
-        9) menu_komari_probe ;;
-        20) menu_system_initialization ;;
-        5|7|8) echo "🚧 功能占位开发中..."; sleep 1.5 ;;
-        98)
+        2) 
+            bash <(curl -fsSL "${REMOTE_SYS_TOOL}?v=$(date +%s)")
+            ;;
+        3) 
+            echo "🚧 功能占位开发中..."; sleep 1.5 
+            ;;
+        4) menu_nginx_management ;;
+        5) menu_certificate_management ;;
+        6) 
+            bash <(curl -fsSL "${REMOTE_BBR3}?v=$(date +%s)")
+            ;;
+        7) menu_network_tuning ;;
+        8) 
+            bash <(curl -fsSL "${REMOTE_KOMARI}?v=$(date +%s)")
+            ;;
+        97)
             sudo cp "$0" "$LOCAL_SCRIPT_PATH"
             sudo chmod +x "$LOCAL_SCRIPT_PATH"
             (crontab -l 2>/dev/null | grep -v "cj --no-update"; echo "0 3 * * * $LOCAL_SCRIPT_PATH --no-update > /dev/null 2>&1") | crontab -
             echo -e "${C_GREEN}✅ [cj] 命令注册成功，可在任意目录直接输入 cj 唤醒！${C_RESET}"; sleep 1.5
             ;;
+        98) perform_update ;;
         99) perform_uninstall ;;
         0) echo "👋 感谢使用。"; exit 0 ;;
         *) echo "❌ 无效编号"; sleep 1 ;;
