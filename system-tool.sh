@@ -70,18 +70,24 @@ run_hostname_change() {
 }
 
 run_time_sync() {
-    echo -e "${C_CYAN}⏳ 正在应用北京时间...${C_RESET}"
+    echo -e "${C_CYAN}⏳ 正在应用北京时间并构筑底层 NTP 同步环...${C_RESET}"
     sudo timedatectl set-timezone Asia/Shanghai 2>/dev/null || timedatectl set-timezone Asia/Shanghai
     
+    # 彻底弃用 timesyncd，全面采用无视 dbus 延迟报错的独立 chrony 引擎
     if command -v apt-get &> /dev/null; then
-        apt-get install -y systemd-timesyncd 2>/dev/null || sudo apt-get install -y systemd-timesyncd
-        sudo timedatectl set-ntp true 2>/dev/null || timedatectl set-ntp true
-        sudo systemctl restart systemd-timesyncd 2>/dev/null || systemctl restart systemd-timesyncd
+        apt-get install -y chrony 2>/dev/null || sudo apt-get install -y chrony
+        sudo systemctl enable chrony 2>/dev/null || systemctl enable chrony
+        sudo systemctl restart chrony 2>/dev/null || systemctl restart chrony
+        # 屏蔽 timedatectl 自身报错，只要 chrony 跑起来了同步就生效了
+        sudo timedatectl set-ntp true 2>/dev/null || true
     elif command -v yum &> /dev/null; then
         sudo yum install -y chrony 2>/dev/null || yum install -y chrony
-        sudo systemctl enable --now chronyd 2>/dev/null || systemctl enable --now chronyd
+        sudo systemctl enable chronyd 2>/dev/null || systemctl enable chronyd
+        sudo systemctl restart chronyd 2>/dev/null || systemctl restart chronyd
+        sudo timedatectl set-ntp true 2>/dev/null || true
     fi
-    echo -e "${C_GREEN}✅ 北京时间校准大功告成！当前时间: $(date "+%Y-%m-%d %H:%M:%S")${C_RESET}"
+    echo -e "${C_GREEN}✅ 北京时间校准及 NTP 自动同步引擎大功告成！${C_RESET}"
+    echo -e "当前时间: $(date "+%Y-%m-%d %H:%M:%S")"
 }
 
 # 菜单主逻辑
