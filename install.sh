@@ -18,8 +18,9 @@ NG_SSL_BACKUP_DIR="/cj/temp/nginx/ssl"
 # 动态远程脚本变量
 REMOTE_SYS_TOOL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/system-tool.sh"
 REMOTE_FIREWALL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/firewall-tool.sh"
+REMOTE_TCP="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/tcp.sh"
+REMOTE_DOCKER="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-install-dp.sh"
 REMOTE_KOMARI="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-Komari.sh"
-REMOTE_BBR3="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/bbr3-install.sh"
 
 # 更新函数
 perform_update() {
@@ -533,45 +534,6 @@ menu_nginx_management() {
     done
 }
 
-# 网络调优模块
-menu_network_tuning() {
-    clear
-    echo -e "${C_BLUE}⚡ Linux 核心级网络性能调控矩阵${C_RESET}"
-    echo -e "${LINE_GRAY}"
-    echo -e "1) 常规 Web 服务器 TCP 综合深度优化"
-    echo -e "2) 代理专属极速优化 (低延迟 / 宽吞吐拓扑优化)"
-    echo -e "0) 返回上一层"
-    echo -e "${LINE_GRAY}"
-    read -p "选择调优模式: " NET_OPT
-
-    if [ "$NET_OPT" == "1" ]; then
-        echo "⏳ 正在重构底层内核 Web 缓冲栈参数..."
-        sudo sysctl -w net.core.somaxconn=1024 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_max_syn_backlog=2048 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_keepalive_time=1200 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_keepalive_intvl=30 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_keepalive_probes=5 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216" 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 16777216" 2>/dev/null
-        sudo sysctl -p 2>/dev/null
-        echo -e "${C_GREEN}✅ Web TCP 综合吞吐调优完成。${C_RESET}"; sleep 1.5
-    elif [ "$NET_OPT" == "2" ]; then
-        echo "⏳ 正在注入网络代理专用低延宽带核心锁..."
-        sudo sysctl -w net.core.netdev_max_backlog=65535 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_notsent_lowat=16384 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_no_metrics_save=1 2>/dev/null
-        sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535" 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null
-        sudo sysctl -w net.ipv4.tcp_fin_timeout=15 2>/dev/null
-        sudo sysctl -w net.core.rmem_max=67108864 2>/dev/null
-        sudo sysctl -w net.core.wmem_max=67108864 2>/dev/null
-        sudo ip link set lo txqueuelen 10000 2>/dev/null
-        sudo sysctl -p 2>/dev/null
-        echo -e "${C_GREEN}✅ 代理网络低延迟专属优化完毕！${C_RESET}"; sleep 1.5
-    fi
-}
-
 # 全局主菜单循环
 while true; do
     clear
@@ -580,10 +542,10 @@ while true; do
     echo -e "1) 查询当前基础系统现状"
     echo -e "2) 系统初始化 ⭐"
     echo -e "3) 防火墙 ⭐"
-    echo -e "4) Nginx 核心矩阵服务管理 ⭐"
-    echo -e "5) acme.sh 自动化证书管家 ⭐"
-    echo -e "6) BBR3 内核及传输层安装 (占位)"
-    echo -e "7) Network 内核吞吐优化 ⭐"
+    echo -e "4) TCP 调优工具 ⭐"
+    echo -e "5) Docker 管理 ⭐"
+    echo -e "6) Nginx 核心矩阵服务管理 ⭐"
+    echo -e "7) acme.sh 自动化证书管家 ⭐"
     echo -e "8) Komari 服务可用性探针 ⭐"
     echo -e "96) 系统优化 (占位置)"
     echo -e "97) 注册快捷命令 cj"
@@ -611,12 +573,14 @@ while true; do
         3) 
             bash <(curl -fsSL "${REMOTE_FIREWALL}?v=$(date +%s)")
             ;;
-        4) menu_nginx_management ;;
-        5) menu_certificate_management ;;
-        6) 
-            bash <(curl -fsSL "${REMOTE_BBR3}?v=$(date +%s)")
+        4)
+            bash <(curl -fsSL "${REMOTE_TCP}?v=$(date +%s)")
             ;;
-        7) menu_network_tuning ;;
+        5)
+            bash <(curl -fsSL "${REMOTE_DOCKER}?v=$(date +%s)")
+            ;;
+        6) menu_nginx_management ;;
+        7) menu_certificate_management ;;
         8) 
             bash <(curl -fsSL "${REMOTE_KOMARI}?v=$(date +%s)")
             ;;
