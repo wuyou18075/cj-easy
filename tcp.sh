@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-#             ⚡ TCP内核调优与网络优化矩阵 ⚡
+#             ⚡ TCP内核调优与智能靶向测速矩阵 ⚡
 # =========================================================
 
 # 全局色彩控制台
@@ -28,17 +28,26 @@ fi
 
 init_dependencies() {
     local missing_deps=()
-    for cmd in wget awk grep curl ping bc ip; do
+    for cmd in wget awk grep curl ping bc ip python3; do
         if ! command -v $cmd &> /dev/null; then
             missing_deps+=("$cmd")
         fi
     done
     if [ ${#missing_deps[@]} -gt 0 ]; then
+        echo -e "${C_CYAN}⏳ 正在拉取底层探针所需的基础组件 (包含 python3 原生测速核)...${C_RESET}"
         apt-get update -y >/dev/null 2>&1 || yum makecache -y >/dev/null 2>&1
         apt-get install -y "${missing_deps[@]}" >/dev/null 2>&1 || yum install -y "${missing_deps[@]}" >/dev/null 2>&1
     fi
 }
 init_dependencies
+
+# 核心：自动部署 Speedtest 原生探针核 (轻量化无依赖)
+init_speedtest_core() {
+    if [ ! -f "/tmp/st_core.py" ]; then
+        wget -qO /tmp/st_core.py https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py
+        chmod +x /tmp/st_core.py
+    fi
+}
 
 get_ipv6_status_text() {
     local disabled_all
@@ -63,32 +72,8 @@ _get_main_interface_and_mtu() {
 
 _calculate_static_bdp_recommend() {
     local total_mem; total_mem=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    if (( total_mem < 1050000 )); then
-        echo "8388608"
-    else
-        echo "16777216"
-    fi
-}
-
-_execute_speed_probe_raw() {
-    local test_url="http://cachefly.cachefly.net/10mb.test"
-    local wget_output; wget_output=$(wget -4 --no-check-certificate --timeout=6 --tries=1 -O /dev/null "$test_url" 2>&1)
-    local raw_speed; raw_speed=$(echo "$wget_output" | grep -oE '\([0-9.]+\s+[KMG]B/s\)' | tr -d '()')
-    if [ -z "$raw_speed" ]; then raw_speed=$(echo "$wget_output" | grep "MB/s" | awk '{print $(NF-1), $NF}' | tr -d '()'); fi
-    local s_speed="0.00"
-    [ -n "$raw_speed" ] && s_speed=$(echo "$raw_speed" | grep -oE '[0-9.]+')
-
-    local start_t; start_t=$(date +%s.%N)
-    (curl -4 -s -k http://cachefly.cachefly.net/100mb.test -r 0-3145728 > /dev/null) &
-    (curl -4 -s -k http://cachefly.cachefly.net/100mb.test -r 3145729-6291456 > /dev/null) &
-    (curl -4 -s -k http://cachefly.cachefly.net/100mb.test -r 6291457-9437184 > /dev/null) &
-    wait; local end_t; end_t=$(date +%s.%N)
-    local m_speed; m_speed=$(awk -v start="$start_t" -v end="$end_t" 'BEGIN {duration = end - start; if (duration <= 0) duration = 0.001; printf "%.2f", 9.0 / duration;}')
-    
-    local rtt_avg; rtt_avg=$(ping -c 3 -W 2 91.108.56.110 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
-    if [ -z "$rtt_avg" ]; then rtt_avg="0.0"; fi
-
-    echo "$s_speed|$m_speed|$rtt_avg"
+    if (( total_mem < 1050000 )); then echo "8388608"
+    else echo "16777216"; fi
 }
 
 _inject_matrix_values() {
@@ -132,439 +117,130 @@ _inject_matrix_values() {
 }
 
 # =========================================================
-#             🛠️ 二级控制台：核心功能功能块
+#            ⚙️ 核心模块：智能靶向联动测速引擎
 # =========================================================
-
-# 1. 提升单线程速率面板（双轮暗测）
-optimize_single_thread_panel() {
+run_intelligent_speedtest() {
     clear
-    echo -e "${C_CYAN}⏳ 正在启动提升单线程速率专项 A/B 双轮测试，正在采集初始样本...${C_RESET}"
-    echo -e " ⏳ [Round 1/2] 第一轮测试中..."
-    local res1; res1=$(_execute_speed_probe_raw)
-    local s1=$(echo "$res1" | cut -d'|' -f1); local m1=$(echo "$res1" | cut -d'|' -f2); local r1=$(echo "$res1" | cut -d'|' -f3)
+    init_speedtest_core
+    echo -e "${C_BLUE}🛰️ 正在初始化智能网络靶向测速引擎...${C_RESET}"
+    echo -e "${LINE_GRAY}"
+    echo -e " 💡 ${C_YELLOW}原理科普：${C_RESET}普通的测速只测机器的【国际骨干带宽】。为了真实反映您的翻墙体感，我们将针对国内三大运营商的核心商业节点（剔除限速的教育网），进行【回国单线程上传】与【并发多线程上传】专项测试。"
+    echo -e "${LINE_GRAY}"
     
-    echo -e " 休眠3秒........"
-    sleep 3
+    local user_ip=""
+    local user_isp="默认商业节点随机派发"
+    local user_region="中国大陆"
+    local p2p_rtt="测速核自适应"
+    local p2p_loss="测速核自适应"
+
+    read -p "🎯 请输入您国内本地电脑的公网 IP (用于精准查路由，不输入则智能分配最近节点): " user_ip
     
-    echo -e " ⏳ [Round 2/2] 第二轮测试中..."
-    local res2; res2=$(_execute_speed_probe_raw)
-    local s2=$(echo "$res2" | cut -d'|' -f1); local m2=$(echo "$res2" | cut -d'|' -f2); local r2=$(echo "$res2" | cut -d'|' -f3)
-    
-    local os_avg=$(awk -v a="$s1" -v b="$s2" 'BEGIN {printf "%.2f", (a+b)/2}')
-    local or_avg=$(awk -v a="$r1" -v b="$r2" 'BEGIN {printf "%.3f", (a+b)/2}')
-
-    clear
-    echo "========================================================="
-    echo -e "🚀 ${C_CYAN}[单线程高速率与稳定性提升策略选型大盘]${C_RESET}"
-    echo "========================================================="
-    echo -e " 💡 ${C_YELLOW}【多轨网络性能专家自适应选型推演】${C_RESET}:"
-    echo -e "    由于当前公网到美西长途物理时延固定在 ${or_avg} ms 上下，要实现持续不卡顿的高速单线程突围，内核优化方向需解决多核心软中断拥堵与滑动窗口硬上限限制。调优目标冲突时可分以下多轨决策："
-    echo -e ""
-    echo -e "    ${C_GREEN}[ 1 ] 网速吞吐优先预设${C_RESET}  ──► 建议缓冲: 64 MB (倾泻蛮力，压榨单线程最大绝对速度峰值)"
-    echo -e "    ${C_GREEN}[ 2 ] 延迟极速优先预设${C_RESET}  ──► 建议缓冲: 16 MB (卡紧水位，消灭Bufferbloat排队延时)"
-    echo -e "    ${C_GREEN}[ 3 ] 持续稳定优先预设${C_RESET}  ──► 建议缓冲: 30 MB (锁定黄金滑窗大小，消除晚高峰网速上下激烈跳动)"
-    echo -e "    ${C_GREEN}[ 4 ] 综合考虑出厂策略${C_RESET}  ──► 建议缓冲: 48 MB (💥 代理首选！又快又稳，长途高吞吐最优解)"
-    echo "========================================================="
-    read -p " 🤔 请精准输入您期望应用的轨道序号 [1-4] (直接回车默认采用 4 综合考虑): " TRACK_CHOOSE
-    [ -z "$TRACK_CHOOSE" ] && TRACK_CHOOSE="4"
-
-    echo -e "\n⏳ 正在针对性注入策略参数进行底层内核热重载..."
-    _inject_matrix_values "$TRACK_CHOOSE" ""
-    
-    echo -e "⏳ 正在拉起【优化后】物理上轨第二轮双轮测试，中场休息 2 秒..."
-    sleep 2
-    echo -e " ⏳ [Round 1/2] 优化后第一轮测试中..."
-    local n_res1; n_res1=$(_execute_speed_probe_raw)
-    local ns1=$(echo "$n_res1" | cut -d'|' -f1); local nm1=$(echo "$n_res1" | cut -d'|' -f2); local nr1=$(echo "$n_res1" | cut -d'|' -f3)
-    
-    echo -e " 休眠3秒........"
-    sleep 3
-    
-    echo -e " ⏳ [Round 2/2] 优化后第二轮测试中..."
-    local n_res2; n_res2=$(_execute_speed_probe_raw)
-    local ns2=$(echo "$n_res2" | cut -d'|' -f1); local nm2=$(echo "$n_res2" | cut -d'|' -f2); local nr2=$(echo "$n_res2" | cut -d'|' -f3)
-    
-    local ns_avg=$(awk -v a="$ns1" -v b="$ns2" 'BEGIN {printf "%.2f", (a+b)/2}')
-    local nr_avg=$(awk -v a="$nr1" -v b="$nr2" 'BEGIN {printf "%.3f", (a+b)/2}')
-
-    clear
-    echo "========================================================="
-    echo -e "📊 ${C_GREEN}[ 优化执行前后物理效果双轮审计报告 ]${C_RESET}"
-    echo "========================================================="
-    printf " %-22s | %-18s | %-18s\n" "单线程深度监控指标" "调优前 (历史均值)" "调优后 (当前均值)"
-    echo "========================================================="
-    printf " • 第一轮单线程绝对值 | %-18s | %-18s\n" "${s1} MB/s" "${ns1} MB/s"
-    printf " • 第二轮单线程绝对值 | %-18s | %-18s\n" "${s2} MB/s" "${ns2} MB/s"
-    echo "--------------------------------------------------------="
-    printf " 🏆 【双轮综合均速】  | ${C_YELLOW}%-14s${C_RESET} | ${C_GREEN}%-14s${C_RESET}\n" "${os_avg} MB/s" "${ns_avg} MB/s"
-    printf " ⏱️  【平均物理延迟】  | %-18s | %-18s\n" "${or_avg} ms" "${nr_avg} ms"
-    echo "========================================================="
-    echo -e "  1) 应用优化参数"
-    echo -e "  2) 放弃优化并恢复"
-    echo "========================================================="
-    read -p "请输入决策编号: " DEC_OPT
-    if [ "$DEC_OPT" == "2" ]; then
-        cp "$BAK_FILE" "$SYS_FILE" && sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-        echo -e "${C_YELLOW}🛑 已完全回滚撤销。${C_RESET}"; sleep 1.5
-    else
-        echo -e "${C_GREEN}✅ 优化参数已完美长驻锁定！${C_RESET}"; sleep 1.5
-    fi
-}
-
-# 2. 单/多线程同步突围肉搏子面板 (锁死不退回主菜单)
-menu_sync_breakthrough_panel() {
-    while true; do
-        clear
-        local cc_now=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
-        local qd_now=$(sysctl -n net.core.default_qdisc 2>/dev/null)
-        local rm_now=$(sysctl -n net.core.rmem_max 2>/dev/null)
-        local rm_now_mb=$(awk -v b="$rm_now" 'BEGIN {printf "%.1f", b/1024/1024}')
-
-        echo "========================================================="
-        echo -e "🖥️  ${C_BLUE}[单/多线程同步突围矩阵 ──► 细分肉搏管理中心]${C_RESET}"
-        echo "========================================================="
-        echo -e " 当前运行状态: CC=[${C_CYAN}$cc_now${C_RESET}] QDISC=[${C_CYAN}$qd_now${C_RESET}] 缓冲大坝=[${C_GREEN}${rm_now_mb} MB${C_RESET}]"
-        echo "========================================================="
-        echo -e " 1) 压榨内核大套接字缓冲区"
-        echo " 2) 禁止空闲连接窗口回落"
-        echo " 3) 自适应纠偏封锁跨境丢包"
-        echo " 4) 全部应用123"
-        echo " 5) 再次测速"
-        echo " 0) 返回上级菜单"
-        echo "========================================================="
-        read -p "请精准抉择您要注入的序号: " SUB_OPT
-
-        if [ -z "$SUB_OPT" ] || [ "$SUB_OPT" == "0" ]; then break; fi
-
-        case $SUB_OPT in
-            1)
-                clear
-                local total_mem_kb; total_mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-                local rec_mb=64; [ $total_mem_kb -lt 1050000 ] && rec_mb=16
-                echo "========================================================="
-                echo -e "📋 ${C_CYAN}[ 选项 1 ──► 压榨内核大套接字缓冲区硬核风险决断 ]${C_RESET}"
-                echo "========================================================="
-                echo -e " ⚠️  ${C_RED}⚠️ 【不准瞎写警告与漏洞审计说明】:${C_RESET}"
-                echo -e "    1. ${C_YELLOW}内存爆仓 OOM 风险${C_RESET}：缓冲区绝非越大越好！若盲目写死几百MB甚至几GB，在公网遭遇大流量 SYN 洪水攻击时，系统会为每个恶意虚假连接对齐划分物理缓冲区，瞬间引发 Linux 内核爆仓触发 OOM Panic，强行随机斩杀你反代的 Nginx 或容器进程。"
-                echo -e "    2. ${C_YELLOW}缓冲区膨胀 (Bufferbloat) 恶化${C_RESET}：盲目扩容若网卡软中断配额和发包队列限制没跟上，包会积压在网卡层排队，导致物理时延暴涨数秒，网速反倒发生毁灭性滑坡、大面积弹 502 连接超时。"
-                echo -e ""
-                echo -e " 💡 ${C_GREEN}【数据科学安全合理建议值】${C_RESET}："
-                echo -e "    • 对于大内存长肥管道实例，推荐核心范围在 ${C_GREEN}32 MB ~ 64 MB${C_RESET}。"
-                echo -e "    • 当前系统通过物理算法算出的黄金自适应专家推荐值为: ${C_GREEN}${rec_mb} MB${C_RESET}"
-                echo "========================================================="
-                read -p "🤔 请手动输入自定义缓存值 (单位MB, 直接回车采用推荐值 ${rec_mb} MB): " INPUT_MB
-                local FINAL_MB=$rec_mb
-                if [ -n "$INPUT_MB" ]; then
-                    if [[ "$INPUT_MB" =~ ^[0-9]+$ ]] && [ "$INPUT_MB" -gt 0 ]; then FINAL_MB=$INPUT_MB; else echo -e "${C_RED}❌ 格式有误，安全回滚至默认值。${C_RESET}"; sleep 1.5; fi
-                fi
-                local final_bytes=$(awk -v m="$FINAL_MB" 'BEGIN {print m * 1024 * 1024}')
-                local final_default_bytes=$(awk -v b="$final_bytes" 'BEGIN {print int(b / 64)}')
-                [ $final_default_bytes -lt 262144 ] && final_default_bytes=262144
-
-                sed -i '/net.core.rmem_max/d' "$SYS_FILE"; sed -i '/net.core.wmem_max/d' "$SYS_FILE"
-                sed -i '/net.ipv4.tcp_rmem/d' "$SYS_FILE"; sed -i '/net.ipv4.tcp_wmem/d' "$SYS_FILE"
-                echo "net.core.rmem_max = $final_bytes" >> "$SYS_FILE"; echo "net.core.wmem_max = $final_bytes" >> "$SYS_FILE"
-                echo "net.ipv4.tcp_rmem = 4096 $final_default_bytes $final_bytes" >> "$SYS_FILE"
-                echo "net.ipv4.tcp_wmem = 4096 $final_default_bytes $final_bytes" >> "$SYS_FILE"
-                sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-                echo -e "${C_GREEN}✅ 方案 1 物理注入成功：大连接缓冲区锁定为 ${FINAL_MB} MB！${C_RESET}"; read -p "按回车继续..." temp
-                ;;
-            2)
-                clear
-                echo "========================================================="
-                echo -e "📋 ${C_CYAN}[ 选项 2 ──► 禁止空闲连接窗口回落风险决断 ]${C_RESET}"
-                echo "========================================================="
-                echo -e " ⚠️  ${C_RED}⚠️ 【不准瞎写警告与原理说明】:${C_RESET}"
-                echo -e "    • 对应内核参数项为 \`net.ipv4.tcp_slow_start_after_idle\`。"
-                echo -e "    • Linux 内核原生硬规定此项【只允许设置为 0 或 1】！如果瞎写其他数字，内核直接判定无效拒不加载，或者强行等价处理为 1。一旦设为 1，只要代理长连接超过几秒没有突发数据，好不容易探测出来的顶格 cwnd 会被内核无情掐断，迫使连接再次重回挤牙膏慢启动，引发刷网页、拉大图突发性转圈和卡顿。"
-                echo -e ""
-                echo -e " 💡 ${C_GREEN}【跨境高延迟长连接唯一合理建议值】${C_RESET}："
-                echo -e "    • 锁定为 ${C_GREEN}0 (物理禁用慢启动空闲重置)${C_RESET}。"
-                echo "========================================================="
-                read -p "🤔 是否确应用推荐优选值 0 ？[Y/n] (直接回车确认应用): " IS_IDLE_OPT
-                if [[ "$IS_IDLE_OPT" == "y" || "$IS_IDLE_OPT" == "Y" || -z "$IS_IDLE_OPT" ]]; then
-                    sed -i '/net.ipv4.tcp_slow_start_after_idle/d' "$SYS_FILE"
-                    echo "net.ipv4.tcp_slow_start_after_idle = 0" >> "$SYS_FILE"
-                    sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-                    echo -e "${C_GREEN}✅ 方案 2 物理注入成功：空闲慢启动衰减已切断！${C_RESET}"
-                fi; read -p "按回车继续..." temp
-                ;;
-            3)
-                clear
-                echo "========================================================="
-                echo -e "📋 ${C_CYAN}[ 选项 3 ──► 自适应纠偏封锁跨境丢包风险决断 ]${C_RESET}"
-                echo "========================================================="
-                echo -e " ⚠️  ${C_RED}⚠️ 【不准瞎写警告与跨境骨干路由器审计说明】:${C_RESET}"
-                echo -e "    • 对应内核参数项为 \`net.ipv4.tcp_ecn\`。范围严格限定为【0, 1, 2】。"
-                echo -e "    • ${C_RED}不要盲目设为 1 (强开)${C_RESET}：中美跨国海底光缆在晚高峰会经过大量复杂的跨国路由器，有很多不具备 ECN 解析能力。若强行设为 1，数据包打上强开标志后，中途路由器会直接采取【就地丢弃 (Drop)】，直接引发诡异的突发性网络完全阻断。设为 0（关闭）则完全失去在网络微拥塞时自适应降速防丢包的能力。"
-                echo -e ""
-                echo -e " 💡 ${C_GREEN}【跨境 280ms 高丢包线路唯一合理值】${C_RESET}："
-                echo -e "    • 必须调整为 ${C_GREEN}2 (自适应对齐模式)${C_RESET}。仅对入站连接被动对齐响应，完美规避跨国路由器误杀丢包。"
-                echo "========================================================="
-                read -p "🤔 是否确认应用最优纠偏值 2 ？[Y/n] (直接回车确认应用): " IS_ECN_OPT
-                if [[ "$IS_ECN_OPT" == "y" || "$IS_ECN_OPT" == "Y" || -z "$IS_ECN_OPT" ]]; then
-                    sed -i '/net.ipv4.tcp_ecn/d' "$SYS_FILE"
-                    echo "net.ipv4.tcp_ecn = 2" >> "$SYS_FILE"
-                    sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-                    echo -e "${C_GREEN}✅ 方案 3 物理注入成功：tcp_ecn 已精准纠偏为 2 自适应防御！${C_RESET}"
-                fi; read -p "按回车继续..." temp
-                ;;
-            4)
-                clear
-                echo -e "${C_CYAN}⏳ 正在启动全部应用自适应调优 A/B 双轮测试，采集优化前样本...${C_RESET}"
-                echo -e " ⏳ [Round 1/2] 第一轮测试中..."
-                local old1; old1=$(_execute_speed_probe_raw)
-                echo -e " 休眠5秒........"
-                sleep 5
-                echo -e " ⏳ [Round 2/2] 第二轮测试中..."
-                local old2; old2=$(_execute_speed_probe_raw)
-                
-                local os_avg=$(awk -v a="$(echo "$old1" | cut -d'|' -f1)" -v b="$(echo "$old2" | cut -d'|' -f1)" 'BEGIN {printf "%.2f", (a+b)/2}')
-                local om_avg=$(awk -v a="$(echo "$old1" | cut -d'|' -f2)" -v b="$(echo "$old2" | cut -d'|' -f2)" 'BEGIN {printf "%.2f", (a+b)/2}')
-                local or_avg=$(awk -v a="$(echo "$old1" | cut -d'|' -f3)" -v b="$(echo "$old2" | cut -d'|' -f3)" 'BEGIN {printf "%.3f", (a+b)/2}')
-
-                clear
-                echo "========================================================="
-                echo -e "🚀 ${C_CYAN}[全部联动策略注入 ──► 多轨优化分流控制中心]${C_RESET}"
-                echo "========================================================="
-                echo -e " 💡 调优冲突决断：当极限吞吐与延迟稳定性发生冲突时，请做出技术倾向选型："
-                echo -e "    [ 1 ] 网速吞吐优先预设  ──► 建议缓冲: 64 MB (压榨最高网速绝对上限)"
-                echo -e "    [ 2 ] 延迟极速优先预设  ──► 建议缓冲: 16 MB (卡紧水位，消灭Bufferbloat排队延时)"
-                echo -e "    [ 3 ] 持续稳定优先预设  ──► 建议缓冲: 30 MB (锁定中水位，拦截大波动跳动)"
-                echo -e "    [ 4 ] 综合考虑出厂策略  ──► 建议缓冲: 48 MB (💥 代理首选！又快又稳，长途高吞吐最优解)"
-                echo "========================================================="
-                read -p " 🤔 请精准注入您期望应用的轨道序号 [1-4] (直接回车默认采用 4 综合考虑): " AUTO_TRACK
-                [ -z "$AUTO_TRACK" ] && AUTO_TRACK="4"
-
-                _inject_matrix_values "$AUTO_TRACK" ""
-                
-                echo -e "\n⏳ 正在拉起全量优化上轨后的第二轮双轮验证测试..."
-                echo -e " ⏳ [Round 1/2] 优化后第一轮测试中..."
-                local new1; new1=$(_execute_speed_probe_raw)
-                echo -e " 休眠5秒........"
-                sleep 5
-                echo -e " ⏳ [Round 2/2] 优化后第二轮测试中..."
-                local new2; new2=$(_execute_speed_probe_raw)
-
-                local ns_avg=$(awk -v a="$(echo "$new1" | cut -d'|' -f1)" -v b="$(echo "$new2" | cut -d'|' -f1)" 'BEGIN {printf "%.2f", (a+b)/2}')
-                local nm_avg=$(awk -v a="$(echo "$new1" | cut -d'|' -f2)" -v b="$(echo "$new2" | cut -d'|' -f2)" 'BEGIN {printf "%.2f", (a+b)/2}')
-                local nr_avg=$(awk -v a="$(echo "$new1" | cut -d'|' -f3)" -v b="$(echo "$new2" | cut -d'|' -f3)" 'BEGIN {printf "%.3f", (a+b)/2}')
-
-                clear
-                echo "========================================================="
-                echo -e "📊 ${C_GREEN}[ 联动自适应全部应用 ──► 物理效果双轮审计报告 ]${C_RESET}"
-                echo "========================================================="
-                printf " %-22s | %-18s | %-18s\n" "系统网络高并发核心指标" "调优前 (历史均值)" "调优后 (当前均值)"
-                echo "========================================================="
-                printf " • 🏆 【单线程双轮均速】    | ${C_YELLOW}%-14s${C_RESET} | ${C_GREEN}%-14s${C_RESET}\n" "${os_avg} MB/s" "${ns_avg} MB/s"
-                printf " • 🚀 【多线程极限带宽】    | ${C_YELLOW}%-14s${C_RESET} | ${C_GREEN}%-14s${C_RESET}\n" "${om_avg} MB/s" "${nm_avg} MB/s"
-                printf " • ⏱️  【跨境骨干物理延迟】  | %-18s | %-18s\n" "${or_avg} ms" "${nr_avg} ms"
-                echo "========================================================="
-                echo -e "  1) 确认应用策略  2) 放弃优化并完整回退"
-                echo "========================================================="
-                read -p "请输入决策编号: " AUTO_DEC
-                if [ "$AUTO_DEC" == "2" ]; then
-                    cp "$BAK_FILE" "$SYS_FILE" && sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-                    echo -e "${C_YELLOW}🛑 已完好无损安全回滚。${C_RESET}"; sleep 1.5
-                else
-                    echo -e "${C_GREEN}🎉 联动参数锁定成功！${C_RESET}"; sleep 1.5
-                fi
-                ;;
-            5)
-                # 原地再次测速项
-                break
-                ;;
-        esac
-    done
-}
-
-# =========================================================
-#                    ⚙️ 独立闭环自适应双轮测试大盘
-# =========================================================
-run_multi_dim_speedtest() {
-    while true; do
-        clear
-        echo -e "${C_CYAN}⏳ 正在启动分布式双轮全向交叉监测大盘，阻断一切瞬时误差...${C_RESET}"
-        echo -e "${LINE_GRAY}"
+    if [ -n "$user_ip" ]; then
+        echo -e "⏳ 正在通过全球 BGP 路由表反查您的物理归属地..."
+        local ip_info; ip_info=$(curl -s -m 3 "http://ip-api.com/json/$user_ip?lang=zh-CN")
+        local req_status; req_status=$(echo "$ip_info" | grep -oP '"status":"\K[^"]+')
         
-        echo -e " ⏳ 第一轮测试中..."
-        local r1; r1=$(_execute_speed_probe_raw)
-        local s1=$(echo "$r1" | cut -d'|' -f1); local m1=$(echo "$r1" | cut -d'|' -f2); local rtt1=$(echo "$r1" | cut -d'|' -f3)
-        
-        echo -e "${LINE_GRAY}"
-        echo -e "📊 第一轮测试"
-        echo -e " 📊 单线程物理净吞吐速率:   (公网直连) ${s1} MB/s"
-        echo -e " 🚀 多线程高并发极限带宽:   (并发压榨) ${m1} MB/s"
-        echo -e " 🛰️  当前跨境骨干物理延迟:   ${rtt1} ms"
-        echo -e "${LINE_GRAY}"
-        
-        echo -e " 休眠5秒........"
-        sleep 5
-        
-        echo -e "\n ⏳ 第二轮测试中..."
-        local r2; r2=$(_execute_speed_probe_raw)
-        local s2=$(echo "$r2" | cut -d'|' -f1); local m2=$(echo "$r2" | cut -d'|' -f2); local rtt2=$(echo "$r2" | cut -d'|' -f3)
-        
-        echo -e "${LINE_GRAY}"
-        echo -e "📊 第二轮测试"
-        echo -e " 📊 单线程物理净吞吐速率:   (公网直连) ${s2} MB/s"
-        echo -e " 🚀 多线程高并发极限带宽:   (并发压榨) ${m2} MB/s"
-        echo -e " 🛰️  当前跨境骨干物理延迟:   ${rtt2} ms"
-        
-        while true; do
-            echo -e "${LINE_GRAY}"
-            echo -e " 1) 提升单线程速率"
-            echo -e " 2) 单 / 多线程同步突围"
-            echo -e " 3) 🔄 再次测速"
-            echo -e " 0) 放弃并返回上级主菜单"
-            echo -e "${LINE_GRAY}"
-            read -p "请精准抉择您要注入的序号: " MAIN_INNER_OPT
+        if [ "$req_status" == "success" ]; then
+            user_region=$(echo "$ip_info" | grep -oP '"regionName":"\K[^"]+')
+            user_isp=$(echo "$ip_info" | grep -oP '"isp":"\K[^"]+')
+            echo -e "✅ 精准锁定本地靶标: ${C_CYAN}$user_region - $user_isp${C_RESET}"
             
-            if [ -z "$MAIN_INNER_OPT" ] || [ "$MAIN_INNER_OPT" == "0" ]; then 
-                return 2
-            fi
-            
-            if [ "$MAIN_INNER_OPT" == "1" ]; then
-                optimize_single_thread_panel
-                break # 触发外层循环重测，核验最终物理反馈
-            elif [ "$MAIN_INNER_OPT" == "2" ]; then
-                menu_sync_breakthrough_panel
-                break # 肉搏子菜单调整完或点了再次测速，直接跳回外层重新洗牌测速
-            elif [ "$MAIN_INNER_OPT" == "3" ]; then
-                break # 直接击穿本层，重卷第一轮和第二轮
+            echo -e "⏳ 正在向目标路由发起直连物理 ICMP 探针穿透测试..."
+            local ping_res; ping_res=$(ping -c 5 -W 2 "$user_ip" 2>/dev/null)
+            if [ $? -eq 0 ]; then
+                p2p_loss=$(echo "$ping_res" | grep -oP '\d+(?=% packet loss)' | awk '{print $1}')
+                p2p_rtt=$(echo "$ping_res" | tail -n 1 | awk -F '/' '{print $5}')
+                echo -e "✅ 端到端物理连通：延迟 ${C_GREEN}${p2p_rtt} ms${C_RESET} | 丢包率 ${C_YELLOW}${p2p_loss}%${C_RESET}"
             else
-                echo -e "${C_RED}❌ 无效选项${C_RESET}"; sleep 1
+                echo -e "⚠️ 目标 IP 配置了禁 Ping (ICMP拦截)，物理穿透转交底层测速核接管。"
             fi
-        done
-    done
-}
+        else
+            echo -e "❌ IP 解析失败，将使用通用测速大盘。"
+        fi
+    else
+        echo -e "👉 已跳过私有 IP 注入，启用全景随机侦测模式。"
+    fi
 
-run_telegram_spec_test() {
-    echo -e "⏳ 正在连通 Telegram 全球核心骨干机房进行时延与丢包率交叉监测..."
-    local dc1_ip="149.154.175.50"; local dc2_ip="149.154.167.51"; local dc5_ip="91.108.56.110"
-    test_ping() {
-        local ip=$1; local res; res=$(ping -c 4 -W 2 "$ip" 2>/dev/null)
-        if [ $? -ne 0 ] || [ -z "$res" ]; then echo -e "${C_RED}❌ 物理断流 (超时/阻断)${C_RESET}"; else
-            local loss; loss=$(echo "$res" | grep -oP '\d+(?=% packet loss)'); local avg_time; avg_time=$(echo "$res" | tail -n 1 | awk -F '/' '{print $5}')
-            echo -e "${C_GREEN}${avg_time} ms${C_RESET} (丢包率: ${C_YELLOW}${loss}%${C_RESET})"; fi
-    }
     echo -e "${LINE_GRAY}"
-    echo -n " 🌐 Telegram DC1 [北美-迈阿密]:   " && test_ping "$dc1_ip"
-    echo -n " 🌐 Telegram DC2 [欧洲-阿姆]:     " && test_ping "$dc2_ip"
-    echo -n " 🌐 Telegram DC5 [亚洲-新加坡]:   " && test_ping "$dc5_ip"
-}
+    echo -e "🚀 正在启动 国际基准 与 国内回程 双轨测速 (大概耗时1~2分钟，请耐心等待)...\n"
 
-adaptive_tcp_tuning() {
+    # ================== 测试项 1: 国际控制变量基准 ==================
+    echo -e "🌍 ${C_CYAN}[ 测试项 1/2 : 国际骨干网基准 (控制变量) ]${C_RESET}"
+    echo -e "   正在测试机器本身物理网卡出口到国际枢纽的极限性能..."
+    # --single 测试单线程， 不加测试多线程。用 Cloudflare 等默认节点
+    local intl_single; intl_single=$(python3 /tmp/st_core.py --single --secure | grep -E "Download:|Upload:")
+    local intl_s_down=$(echo "$intl_single" | grep "Download:" | awk '{printf "%.2f", $2/8}')
+    local intl_s_up=$(echo "$intl_single" | grep "Upload:" | awk '{printf "%.2f", $2/8}')
+    
+    local intl_multi; intl_multi=$(python3 /tmp/st_core.py --secure | grep -E "Download:|Upload:")
+    local intl_m_down=$(echo "$intl_multi" | grep "Download:" | awk '{printf "%.2f", $2/8}')
+    local intl_m_up=$(echo "$intl_multi" | grep "Upload:" | awk '{printf "%.2f", $2/8}')
+
+    # ================== 测试项 2: 回国真实体感测试 ==================
+    echo -e "\n🇨🇳 ${C_CYAN}[ 测试项 2/2 : 中国大陆核心商业节点真实回程 ]${C_RESET}"
+    echo -e "   正在拉取国内节点列表，并智能剔除高墙教育网 (CERNET/University)..."
+    
+    # 获取国内节点，过滤教育网
+    local cn_servers; cn_servers=$(python3 /tmp/st_core.py --list | grep -E "China|Shanghai|Beijing|Guangzhou|Shenzhen" | grep -iv -E "University|Edu|CERNET" | head -n 5)
+    local target_server_id=""
+    
+    # 如果用户有输入ISP（比如移动），优先匹配包含该关键字的节点
+    if [ -n "$user_ip" ] && [[ "$user_isp" == *"Mobile"* || "$user_isp" == *"移动"* ]]; then
+        target_server_id=$(echo "$cn_servers" | grep -i -E "Mobile|移动" | head -n 1 | awk -F')' '{print $1}' | tr -d ' ')
+    elif [ -n "$user_ip" ] && [[ "$user_isp" == *"Telecom"* || "$user_isp" == *"电信"* ]]; then
+        target_server_id=$(echo "$cn_servers" | grep -i -E "Telecom|电信" | head -n 1 | awk -F')' '{print $1}' | tr -d ' ')
+    fi
+
+    # 如果没匹配到，随便抓一个排第一的商业节点
+    if [ -z "$target_server_id" ]; then
+        target_server_id=$(echo "$cn_servers" | head -n 1 | awk -F')' '{print $1}' | tr -d ' ')
+    fi
+    local target_server_name=$(echo "$cn_servers" | grep "^ *${target_server_id})" | cut -d')' -f2 | awk -F'[' '{print $1}')
+
+    if [ -n "$target_server_id" ]; then
+        echo -e "   🎯 已锁定高质量商业测速靶点: ${C_YELLOW}${target_server_name} (ID: ${target_server_id})${C_RESET}"
+        
+        local cn_single; cn_single=$(python3 /tmp/st_core.py --server $target_server_id --single --secure 2>/dev/null | grep -E "Download:|Upload:")
+        local cn_s_down=$(echo "$cn_single" | grep "Download:" | awk '{printf "%.2f", $2/8}')
+        local cn_s_up=$(echo "$cn_single" | grep "Upload:" | awk '{printf "%.2f", $2/8}')
+
+        local cn_multi; cn_multi=$(python3 /tmp/st_core.py --server $target_server_id --secure 2>/dev/null | grep -E "Download:|Upload:")
+        local cn_m_down=$(echo "$cn_multi" | grep "Download:" | awk '{printf "%.2f", $2/8}')
+        local cn_m_up=$(echo "$cn_multi" | grep "Upload:" | awk '{printf "%.2f", $2/8}')
+    else
+        echo -e "   ⚠️ 未能成功拉取到国内节点，回国测试项置空。"
+        local cn_s_down="0.00"; local cn_s_up="0.00"; local cn_m_down="0.00"; local cn_m_up="0.00"
+    fi
+
+    # ================== 渲染最终审计大盘 ==================
     clear
-    echo -e "${C_BLUE}🛰️  正在启动全向自适应通用网络探针，深入盘查宿主机物理现状...${C_RESET}"
-    echo -e "${LINE_GRAY}"
-
-    local cpu_arch; cpu_arch=$(uname -m)
-    echo -n " [1/3] 🔍 正在检索物理 CPU 芯片架构: "
-    if [[ "$cpu_arch" == *"x86_64"* || "$cpu_arch" == *"amd64"* ]]; then
-        local target_cpu="X86_64 蛮力计算核心"; echo -e "${C_CYAN}$target_cpu${C_RESET}"
-    else
-        local target_cpu="ARM 轻量/高密度核心"; echo -e "${C_GREEN}$target_cpu${C_RESET}"; fi
-
-    local total_mem_kb; total_mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    local total_mem_mb; total_mem_mb=$(awk -v k="$total_mem_kb" 'BEGIN {print int(k / 1024)}')
-    echo -e " [2/3] 🔍 正在核验宿主机可用内存规模: ${C_CYAN}${total_mem_mb} MB${C_RESET}"
-
-    echo -e " [3/3] ⏳ 正在精确嗅探物理网卡到骨干网的绝对 RTT 时延..."
-    local ping_raw; ping_raw=$(ping -c 3 -W 2 91.108.56.110 2>/dev/null)
-    local rtt_ms; rtt_ms=$(echo "$ping_raw" | tail -n 1 | awk -F '/' '{print $5}')
+    echo "========================================================="
+    echo -e "📊 ${C_GREEN}[ 智能靶向网络链路双轨审计报告 ]${C_RESET}"
+    echo "========================================================="
+    echo -e " 📍 用户本地网络画像 : ${C_CYAN}${user_region} - ${user_isp}${C_RESET}"
+    echo -e " 📍 端到端直连物理探测: 延迟 ${C_YELLOW}${p2p_rtt} ms${C_RESET} | 丢包率 ${C_YELLOW}${p2p_loss}%${C_RESET}"
+    echo -e " 📍 国内测速着陆节点 : ${C_CYAN}${target_server_name:-无}${C_RESET}"
+    echo "========================================================="
+    echo -e " ⚠️ ${C_YELLOW}数据说明${C_RESET}："
+    echo -e "   • 测试结果已自动折算为我们日常使用的 ${C_CYAN}MB/s (兆字节每秒)${C_RESET}。"
+    echo -e "   • 【机器下载】反映您的代理去抓取外部内容的速度。"
+    echo -e "   • ${C_RED}【回国上传】反映的是您在国内用浏览器或软件翻墙时，真实的拉取体感上限！${C_RESET}"
+    echo "─────────────────────────────────────────────────────────"
     
-    if [ -z "$rtt_ms" ] || [ "$rtt_ms" == "0" ]; then rtt_ms="250"
-    else
-        local t1; t1=$(echo "$ping_raw" | grep "time=" | awk -F 'time=' '{print $2}' | awk '{print $1}' | head -n 1)
-        local t2; t2=$(echo "$ping_raw" | grep "time=" | awk -F 'time=' '{print $2}' | awk '{print $1}' | head -n 2 | tail -n 1)
-        local t3; t3=$(echo "$ping_raw" | grep "time=" | awk -F 'time=' '{print $2}' | awk '{print $1}' | tail -n 1)
-        echo -e "      ──► ${C_GREEN}[物理测速成功] 成功向全球骨干网下发 3 次 ICMP 套接字包${C_RESET}"
-        echo -e "      ──► [真实回显数据] 第一次: ${t1}ms | 第二次: ${t2}ms | 第三次: ${t3}ms"; fi
-    echo -e "      ──► 最终物理判定平均时延 RTT 为: ${C_YELLOW}${rtt_ms} ms${C_RESET}"
-    echo -e "${LINE_GRAY}"
-
-    local max_buf=16777216; local rmem_default=262144; local wmem_default=262144
-    if (( total_mem_kb < 1050000 )); then max_buf=8388608; rmem_default=87380; wmem_default=65536
-    else max_buf=67108864; rmem_default=1048576; wmem_default=1048576; fi
-
-    local net_info; net_info=$(_get_main_interface_and_mtu)
-    local current_iface; current_iface=$(echo "$net_info" | cut -d'|' -f1)
-    local current_mtu; current_mtu=$(echo "$net_info" | cut -d'|' -f2)
-
-    local old_cc; old_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
-    local old_qdisc; old_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null)
-    local old_rmem; old_rmem=$(sysctl -n net.core.rmem_max 2>/dev/null)
-    local old_wmem; old_wmem=$(sysctl -n net.core.wmem_max 2>/dev/null)
-    local old_sack; old_sack=$(sysctl -n net.ipv4.tcp_sack 2>/dev/null)
-    local old_ecn; old_ecn=$(sysctl -n net.ipv4.tcp_ecn 2>/dev/null)
-    local old_idle; old_idle=$(sysctl -n net.ipv4.tcp_slow_start_after_idle 2>/dev/null)
-    local old_reuse; old_reuse=$(sysctl -n net.ipv4.tcp_tw_reuse 2>/dev/null)
-
-    printf " %-30s | %-16s | %-16s\n" "内核核心配置调优参数项" "原本历史数值" "推演建议新值"
-    echo -e "${LINE_GRAY}"
-    printf " • mtu最大传输单元 (网卡级)    | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "$current_mtu" "1500 (公网标准)"
-    printf " • tcp_congestion_control     | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${old_cc:-cubic}" "bbr"
-    printf " • default_qdisc               | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${old_qdisc:-pfifo_fast}" "fq"
-    printf " • rmem_max (最大核心读缓冲)   | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${old_rmem:-212992}" "$max_buf"
-    printf " • wmem_max (最大核心写缓冲)   | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${old_wmem:-212992}" "$max_buf"
-    printf " • tcp_sack (SACK 选择性确认)  | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${old_sack:-1}" "1"
-    printf " • tcp_ecn (ECN 显式拥塞通知)  | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${old_ecn:-0}" "2 (自适应开启)"
-    printf " • tcp_slow_start_after_idle   | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${old_idle:-1}" "0 (空闲不重置)"
-    printf " • tcp_tw_reuse (TIME_WAIT复用)| %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${old_reuse:-2}" "1"
-    echo -e "${LINE_GRAY}"
-    
-    read -p "❓ 是否确认进入调优项目细分勾选保存流程？[y/N] (回车默认放弃): " CONFIRM_CHOOSE
-    if [[ "$CONFIRM_CHOOSE" != "y" && "$CONFIRM_CHOOSE" != "Y" ]]; then return; fi
-
-    echo ""
+    printf " %-20s | %-16s | %-16s\n" "测试维度类别" "国际基准极限带宽" "真实验证回国体感"
+    echo "─────────────────────────────────────────────────────────"
+    printf " • 单线程下载 (测内核)  | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${intl_s_down:-0.00} MB/s" "${cn_s_down:-0.00} MB/s"
+    printf " • 单线程上传 (测翻墙)  | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${intl_s_up:-0.00} MB/s" "${cn_s_up:-0.00} MB/s"
+    echo "─────────────────────────────────────────────────────────"
+    printf " • 多线程下载 (测网卡)  | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${intl_m_down:-0.00} MB/s" "${cn_m_down:-0.00} MB/s"
+    printf " • 多线程上传 (测翻墙)  | %-16s | ${C_GREEN}%-16s${C_RESET}\n" "${intl_m_up:-0.00} MB/s" "${cn_m_up:-0.00} MB/s"
     echo "========================================================="
-    echo -e "🛠️  ${C_CYAN}请选择您要注入的调优项目序号 (支持多选，用英文逗号隔开)${C_RESET}"
-    echo "========================================================="
-    echo -e " ${C_GREEN}1)${C_RESET} 🚀 一键应用上方全部通用自适应调优参数 (含网卡层 MTU 1500 降轨纠偏)"
-    echo -e " ${C_GREEN}2)${C_RESET} 网卡级 MTU 物理降轨纠偏项 (强焊 1500 黄金标准，防丢包)"
-    echo -e " ${C_GREEN}3)${C_RESET} 拥塞算法与排队规则联动项 (bbr + fq)"
-    echo -e " ${C_GREEN}4)${C_RESET} 💥 满血大滑窗最大读写缓冲项 (解绑单/多线程上限，rmem/wmem)"
-    echo -e " ${C_GREEN}5)${C_RESET} TCP动态滑窗缓冲范围优化项 (tcp_rmem & tcp_wmem)"
-    echo -e " ${C_GREEN}6)${C_RESET} 💥 高丢包选择性确认抗灾项 (强开 SACK/DSACK/FACK 预防晚高峰重传雪崩)"
-    echo -e " ${C_GREEN}7)${C_RESET} 💥 跨国骨干网络显式拥塞调优项 (自适应调整 tcp_ecn = 2，防路由误杀)"
-    echo -e " ${C_GREEN}8)${C_RESET} 💥 拒绝空闲连接重置限速项 (将 tcp_slow_start_after_idle 锁死为 0)"
-    echo -e " ${C_GREEN}9)${C_RESET} 高并发端口TIME_WAIT快速回收复用项 (tcp_tw_reuse)"
-    echo -e " ${C_GREEN}10)${C_RESET} 💥 工业级大并发泄洪队列上限项 (大幅扩容全连接队列与网卡轮询配额)"
-    echo "========================================================="
-    read -p "请精准勾选需要应用的序号 [例如 1]: " CHOOSE_INDEX
-    if [ -z "$CHOOSE_INDEX" ]; then return; fi
-    local APPLY_ALL=0; if [[ ",$CHOOSE_INDEX," == *",1,"* ]]; then APPLY_ALL=1; fi
-
-    if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",2,"* ]]; then
-        if [ -n "$current_iface" ]; then sudo ip link set dev "$current_iface" mtu 1500 >/dev/null 2>&1; fi; fi
-    if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",3,"* ]]; then
-        sed -i '/net.ipv4.tcp_congestion_control/d' "$SYS_FILE"; sed -i '/net.core.default_qdisc/d' "$SYS_FILE"
-        echo "net.core.default_qdisc = fq" >> "$SYS_FILE"; echo "net.ipv4.tcp_congestion_control = bbr" >> "$SYS_FILE"; fi
-    if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",4,"* ]]; then
-        sed -i '/net.core.rmem_max/d' "$SYS_FILE"; sed -i '/net.core.wmem_max/d' "$SYS_FILE"
-        echo "net.core.rmem_max = $max_buf" >> "$SYS_FILE"; echo "net.core.wmem_max = $max_buf" >> "$SYS_FILE"; fi
-    if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",5,"* ]]; then
-        sed -i '/net.ipv4.tcp_rmem/d' "$SYS_FILE"; sed -i '/net.ipv4.tcp_wmem/d' "$SYS_FILE"
-        echo "net.ipv4.tcp_rmem = 4096 $rmem_default $max_buf" >> "$SYS_FILE"; echo "net.ipv4.tcp_wmem = 4096 $wmem_default $max_buf" >> "$SYS_FILE"; fi
-    if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",6,"* ]]; then
-        sed -i '/net.ipv4.tcp_sack/d' "$SYS_FILE"; sed -i '/net.ipv4.tcp_dsack/d' "$SYS_FILE"; sed -i '/net.ipv4.tcp_fack/d' "$SYS_FILE"
-        echo "net.ipv4.tcp_sack = 1" >> "$SYS_FILE"; echo "net.ipv4.tcp_dsack = 1" >> "$SYS_FILE"; echo "net.ipv4.tcp_fack = 1" >> "$SYS_FILE"; fi
-    if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",7,"* ]]; then
-        sed -i '/net.ipv4.tcp_ecn/d' "$SYS_FILE"; echo "net.ipv4.tcp_ecn = 2" >> "$SYS_FILE"; fi
-    if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",8,"* ]]; then
-        sed -i '/net.ipv4.tcp_slow_start_after_idle/d' "$SYS_FILE"; echo "net.ipv4.tcp_slow_start_after_idle = 0" >> "$SYS_FILE"; fi
-    if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",9,"* ]]; then
-        sed -i '/net.ipv4.tcp_tw_reuse/d' "$SYS_FILE"; sed -i '/net.ipv4.tw_reuse/d' "$SYS_FILE"; echo "net.ipv4.tcp_tw_reuse = 1" >> "$SYS_FILE"; fi
-    if [ $APPLY_ALL -eq 1 ] || [[ ",$CHOOSE_INDEX," == *",10,"* ]]; then
-        sed -i '/net.core.somaxconn/d' "$SYS_FILE"; sed -i '/net.ipv4.tcp_max_syn_backlog/d' "$SYS_FILE"
-        sed -i '/net.core.netdev_max_backlog/d' "$SYS_FILE"; sed -i '/net.core.netdev_budget/d' "$SYS_FILE"
-        echo "net.core.somaxconn = 32768" >> "$SYS_FILE"; echo "net.ipv4.tcp_max_syn_backlog = 16384" >> "$SYS_FILE"
-        echo "net.core.netdev_max_backlog = 65536" >> "$SYS_FILE"; echo "net.core.netdev_budget = 600" >> "$SYS_FILE"; fi
-    sysctl -p /etc/sysctl.conf >/dev/null 2>&1
-    if [ -n "$current_iface" ] && [ $APPLY_ALL -eq 1 ]; then ip link set dev "$current_iface" txqueuelen 10000 >/dev/null 2>&1; fi
-    echo -e "\n${C_GREEN}🎉 通用自适应优化参数已成功注入！${C_RESET}"; read -p "按回车返回..." temp
+    read -p "审计完毕，按回车键返回核心调度看板..." temp
 }
+
+# =========================================================
+#             🌟 主控制面板
+# =========================================================
 
 while true; do
     clear
@@ -596,17 +272,31 @@ while true; do
     echo -e " • TIME_WAIT快速复用 (reuse) │  ${C_CYAN}%-19s${C_RESET} │  ${C_GREEN}1 (物理开启)${C_RESET}" "${REUSE_NOW:-2}"
     echo -e " • 全域 IPv6 栈阻断状态      │  $(get_ipv6_status_text)                │  --"
     echo -e "${LINE_GRAY}"
-    echo -e " 1) TCP内核调优\n 2) 速率测试 (包含单线程/多线程并联突围)\n 3) 电报数据中心链路专项监测\n 4) 更改阻塞队列\n 5) 还原调优参数 (恢复之前的备份)\n 9) IPv6禁用/开启\n 0) 安全退出\n${LINE_GRAY}"
+    echo -e " 1) TCP智能一键网络底层内核调优"
+    echo -e " 2) 智能靶向网络链路双轨测速大盘 (区分单/多线程与回国体感) ${C_YELLOW}⭐${C_RESET}"
+    echo -e " 3) 还原调优参数 (恢复之前的备份)"
+    echo -e " 9) IPv6 禁用/开启切换"
+    echo -e " 0) 安全退出"
+    echo -e "${LINE_GRAY}"
     read -p "请选择操作序号: " OPT
     
     if [ "$OPT" == "0" ] || [ -z "$OPT" ]; then echo "👋 工具已安全退出。"; exit 0; fi
     case $OPT in
-        1) adaptive_tcp_tuning; read -p "按回车返回..." t ;;
-        2) run_multi_dim_speedtest ;;
-        3) clear; echo -e "${C_CYAN}【3. 电报数据中心链路监测】${C_RESET}"; run_telegram_spec_test; echo -e "${LINE_GRAY}"; read -p "按回车返回..." t ;;
-        4) change_qdisc_action; ;;
-        5) restore_sysctl_backup ;;
-        9) clear; current_v6=$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null); sed -i '/disable_ipv6/d' "$SYS_FILE"; if [ "$current_v6" == "1" ]; then echo "net.ipv6.conf.all.disable_ipv6 = 0" >> "$SYS_FILE"; echo "net.ipv6.conf.default.disable_ipv6 = 0" >> "$SYS_FILE"; sysctl -p /etc/sysctl.conf >/dev/null 2>&1; echo -e "${C_GREEN}🎉 全域 IPv6 已恢复开启！${C_RESET}"; else echo "net.ipv6.conf.all.disable_ipv6 = 1" >> "$SYS_FILE"; echo "net.ipv6.conf.default.disable_ipv6 = 1" >> "$SYS_FILE"; sysctl -p /etc/sysctl.conf >/dev/null 2>&1; echo -e "${C_RED}🛑 内核层 IPv6 已禁用！${C_RESET}"; fi; read -p "按回车返回..." t ;;
+        1) 
+            clear; echo -e "${C_CYAN}【1. 正在初始化内核调优预评估...】${C_RESET}"
+            _inject_matrix_values "4" "" # 默认使用模式4最优配置
+            echo -e "${C_GREEN}✅ 调优完毕！已锁定至跨境大流量全场景最优状态。${C_RESET}"
+            read -p "按回车返回..." t ;;
+        2) 
+            run_intelligent_speedtest ;;
+        3) 
+            clear; echo -e "${C_CYAN}【3. 正在恢复系统出厂网络默认值...】${C_RESET}"
+            if [ -f "$BAK_FILE" ]; then cp "$BAK_FILE" "$SYS_FILE" && sysctl -p /etc/sysctl.conf >/dev/null 2>&1; echo -e "${C_GREEN}✅ 恢复成功！${C_RESET}"; else echo -e "${C_RED}❌ 未找到备份文件。${C_RESET}"; fi
+            read -p "按回车返回..." t ;;
+        9) 
+            clear; current_v6=$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null); sed -i '/disable_ipv6/d' "$SYS_FILE"
+            if [ "$current_v6" == "1" ]; then echo "net.ipv6.conf.all.disable_ipv6 = 0" >> "$SYS_FILE"; echo "net.ipv6.conf.default.disable_ipv6 = 0" >> "$SYS_FILE"; sysctl -p /etc/sysctl.conf >/dev/null 2>&1; echo -e "${C_GREEN}🎉 全域 IPv6 已恢复开启！${C_RESET}"; else echo "net.ipv6.conf.all.disable_ipv6 = 1" >> "$SYS_FILE"; echo "net.ipv6.conf.default.disable_ipv6 = 1" >> "$SYS_FILE"; sysctl -p /etc/sysctl.conf >/dev/null 2>&1; echo -e "${C_RED}🛑 内核层 IPv6 已禁用！${C_RESET}"; fi
+            read -p "按回车返回..." t ;;
         *) echo -e "${C_RED}❌ 无效选项！${C_RESET}" ; sleep 1 ;;
     esac
 done
