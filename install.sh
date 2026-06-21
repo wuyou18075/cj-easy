@@ -363,13 +363,24 @@ menu_nginx_management() {
                     echo "❌ 无效编号"; sleep 1; continue
                 fi
 
-                read -p "请输入子域前缀 (留空随机4位): " SUB_PREFIX
-                [ -z "$SUB_PREFIX" ] && SUB_PREFIX=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 4)
+                echo -e "\n${C_CYAN}正在配置的域名是: ${C_YELLOW}${ROOT_DOMAIN}${C_RESET}"
+                echo -e "1) 泛域名证书模式 (需输入子域前缀)"
+                echo -e "2) 单域名模式 (直接配置 ${ROOT_DOMAIN})"
+                read -p "请选择模式 [1-2]: " DOMAIN_MODE
+
+                if [ "$DOMAIN_MODE" == "1" ]; then
+                    read -p "请输入子域前缀 (留空随机4位): " SUB_PREFIX
+                    [ -z "$SUB_PREFIX" ] && SUB_PREFIX=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 4)
+                    NG_DOMAIN="${SUB_PREFIX}.${ROOT_DOMAIN}"
+                elif [ "$DOMAIN_MODE" == "2" ]; then
+                    NG_DOMAIN="${ROOT_DOMAIN}"
+                else
+                    echo "❌ 无效选择"; sleep 1; continue
+                fi
                 
                 read -p "请输入后端目标端口 (❗必填): " NG_PORT
                 if [ -z "$NG_PORT" ]; then echo "❌ 端口必填"; read -p "回车返回..." temp; continue; fi
 
-                NG_DOMAIN="${SUB_PREFIX}.${ROOT_DOMAIN}"
                 CONF_FILE_PATH="/etc/nginx/conf.d/${NG_DOMAIN}.conf"
                 
                 LOCAL_PRIVATE_IP=$(hostname -I | awk '{print $1}')
