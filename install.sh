@@ -20,7 +20,6 @@ REMOTE_SYS_TOOL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads
 REMOTE_FIREWALL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/firewall-tool.sh"
 REMOTE_TCP="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/tcp.sh"
 REMOTE_DOCKER="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-install-dp.sh"
-REMOTE_DOCKER_TOOL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-tool-install.sh"
 
 # 更新函数
 perform_update() {
@@ -544,9 +543,8 @@ while true; do
     echo -e "3) 防火墙 ⭐"
     echo -e "4) TCP 调优工具 ⭐"
     echo -e "5) Docker 管理 ⭐"
-    echo -e "6) Nginx 核心矩阵服务管理 ⭐"
-    echo -e "7) acme.sh 自动化证书管家 ⭐"
-    echo -e "8) Komari 服务可用性探针 ⭐"
+    echo -e "6) Nginx 管理 "
+    echo -e "7) 证书管家 "
     echo -e "96) 系统优化 (占位置)"
     echo -e "97) 注册快捷命令 cj"
     echo -e "98) 更新本地脚本 ⭐"
@@ -581,9 +579,6 @@ while true; do
             ;;
         6) menu_nginx_management ;;
         7) menu_certificate_management ;;
-        8) 
-            bash <(curl -fsSL "${REMOTE_DOCKER_TOOL}?v=$(date +%s)")
-            ;;
         96)
             echo "🚧 功能占位开发中..."; sleep 1.5 
             ;;
