@@ -274,7 +274,6 @@ run_check_ssh_firewall() {
     if [[ -z "$do_exit" || "$do_exit" =~ ^[Yy]$ ]]; then
         echo -e "${C_GREEN}⏳ 正在断开连接... 请使用新账号和新端口重新登录服务器！${C_RESET}"
         sleep 1
-        # 通过强杀当前 Shell 的父进程来断开 SSH 会话
         kill -9 $PPID
     else
         echo -e "${C_GRAY}已取消退出，请手动验证后再执行 20 选项。${C_RESET}"
@@ -290,31 +289,44 @@ run_lockdown() {
         LOGIN_USER=${SUDO_USER:-$(whoami)}
     fi
     
-    # 提取当前 SSH 接收端口
-    local CONN_PORT=$(echo $SSH_CONNECTION | awk '{print $4}')
+    # 【核心修复】：穿透 sudo 和 subshell 向上层层追溯，精准提取真实的 SSH 端口
+    local CONN_PORT=""
+    local check_pid=$$
+    while [ "$check_pid" -gt 1 ]; do
+        # 尝试从父进程环境变量中抓取 SSH_CONNECTION
+        CONN_PORT=$(cat /proc/$check_pid/environ 2>/dev/null | tr '\0' '\n' | grep '^SSH_CONNECTION=' | awk '{print $4}')
+        if [ -n "$CONN_PORT" ]; then
+            break
+        fi
+        # 向上追溯父进程 PID
+        check_pid=$(awk '/^PPID:/ {print $2}' /proc/$check_pid/status 2>/dev/null || echo 0)
+    done
     
+    local pass_check=true
+
     echo -e "1. 探测当前操作登录用户: ${C_GREEN}$LOGIN_USER${C_RESET}"
+    
     if [ -z "$CONN_PORT" ]; then
-        echo -e "2. 探测当前 SSH 登录接收端口: ${C_YELLOW}未知 (可能运行于 tmux/screen 中)${C_RESET}"
+        echo -e "2. 探测当前 SSH 登录接收端口: ${C_YELLOW}未知 (无法溯源，可能运行于 tmux/screen 或特殊子环境中)${C_RESET}"
+        echo -e "${C_YELLOW}❌ 监测不通过: 无法确切获取您的连接端口！绝对不可以在未知端口状态下盲目封禁。${C_RESET}"
+        pass_check=false
     else
         echo -e "2. 探测当前 SSH 登录接收端口: ${C_GREEN}$CONN_PORT${C_RESET}"
     fi
 
-    local pass_check=true
-
     if [ "$LOGIN_USER" == "root" ]; then
-        echo -e "${C_YELLOW}❌ 监测不通过: 您当前连接会话仍然是 root 身份，为防止失联，禁止操作！${C_RESET}"
+        echo -e "${C_YELLOW}❌ 监测不通过: 您当前登录的用户身份仍然是 root，为防止失联，禁止操作！${C_RESET}"
         pass_check=false
     fi
 
     if [ "$CONN_PORT" == "22" ]; then
-        echo -e "${C_YELLOW}❌ 监测不通过: 您当前的 SSH 连接仍旧建立在 22 端口上，直接封禁会导致会话立即断开或日后失联！${C_RESET}"
+        echo -e "${C_YELLOW}❌ 监测不通过: 您当前的 SSH 连接仍旧建立在 22 端口上，直接封禁会导致会话断开或失联！${C_RESET}"
         pass_check=false
     fi
 
     if [ "$pass_check" == "false" ]; then
         echo -e "${C_GRAY}=================================================${C_RESET}"
-        echo -e "💡 保护机制已熔断: 当前操作已自动中止。"
+        echo -e "💡 保护机制已强行熔断: 当前操作已自动中止。"
         echo -e "请您新开一个终端，使用配置好的【新端口】+【新账号】登录进来后，重新运行本脚本再执行 20 项！"
         return
     fi
@@ -360,7 +372,7 @@ while true; do
     echo -e "7) 添加 SSH 端口并放行防火墙"
     echo -e "8) 用户管理"
     echo -e "9) 检验 SSH 端口与防火墙状态"
-    echo -e "10) 简单初始化环(2,3,4,6)"
+    echo -e "10) 简单初始化环 (2,3,4,6)"
     echo -e "20) 一键禁用 root 和 22端口登录"
     echo -e "0) 退出本脚本"
     echo -e "${LINE_GRAY}"
@@ -384,7 +396,6 @@ while true; do
         run_user_manage
         echo -e "${LINE_GRAY}"
         run_check_ssh_firewall
-        # 因为此处可能会强制结束 SSH，无需额外 pause
         read -p "回车返回..." temp
     elif [ "$SYS_OPT" == "2" ]; then
         run_tool_installation "false"
