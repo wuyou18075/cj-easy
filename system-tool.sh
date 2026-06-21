@@ -153,7 +153,7 @@ run_ssh_port_add() {
         fi
         
         local fw_opened=false
-        if command -v ufw &> /dev/null && ufw status | grep -q "Active"; then
+        if command -v ufw &> /dev/null && ufw status | grep -qE "Active|active"; then
             ufw allow "$new_port"/tcp >/dev/null 2>&1
             fw_opened=true
         fi
@@ -253,17 +253,61 @@ run_check_ssh_firewall() {
     grep -i '^Port ' /etc/ssh/sshd_config || echo -e "Port 22 (系统默认隐含配置)"
 
     echo -e "\n${C_CYAN}🛡️ 当前系统防火墙状态:${C_RESET}"
-    if command -v ufw &> /dev/null; then
+    local active_fw="none"
+    if command -v ufw &> /dev/null && ufw status | grep -qE "Active|active"; then
+        active_fw="ufw"
         ufw status | grep -i "Status" || ufw status
-    elif command -v firewall-cmd &> /dev/null; then
+    elif command -v firewall-cmd &> /dev/null && systemctl is-active --quiet firewalld; then
+        active_fw="firewalld"
         echo -e "Firewalld 运行状态: $(firewall-cmd --state 2>/dev/null)"
         echo -e "已放行的端口: $(firewall-cmd --list-ports 2>/dev/null)"
     elif command -v iptables &> /dev/null; then
+        active_fw="iptables"
         iptables -L INPUT -n | grep dpt || echo "iptables 放行规则如上 (空则表示无特殊拦截)"
     else
-        echo -e "未检测到 ufw/firewalld，系统可能是纯净状态或由云平台安全组进行外部管控。"
+        echo -e "未检测到 ufw/firewalld/iptables，系统可能是纯净状态或由云平台安全组进行外部管控。"
     fi
-    
+
+    # 动态非22端口安全查杀与自动修复
+    if [ "$active_fw" != "none" ]; then
+        echo -e "\n${C_CYAN}🔎 非默认端口防火墙穿透检测:${C_RESET}"
+        local ssh_ports=$(grep -i '^Port ' /etc/ssh/sshd_config | awk '{print $2}')
+        [ -z "$ssh_ports" ] && ssh_ports="22"
+
+        for port in $ssh_ports; do
+            if [ "$port" == "22" ]; then continue; fi
+            echo -e "▶ 校验非标准端口 [ ${C_YELLOW}${port}${C_RESET} ] ..."
+            local is_open=false
+
+            if [ "$active_fw" == "ufw" ]; then
+                if ufw status | grep -qE "^${port}(/tcp)? +ALLOW "; then is_open=true; fi
+            elif [ "$active_fw" == "firewalld" ]; then
+                if firewall-cmd --list-ports 2>/dev/null | grep -qw "${port}/tcp"; then is_open=true; fi
+            elif [ "$active_fw" == "iptables" ]; then
+                if iptables -L INPUT -n | grep -qE "dpt:${port}\b"; then is_open=true; fi
+            fi
+
+            if [ "$is_open" == true ]; then
+                echo -e "   ${C_GREEN}✅ 已放开,安全${C_RESET}"
+            else
+                echo -e "   ${C_YELLOW}⚠️ 监测到端口未放开，现在开始放开...${C_RESET}"
+                if [ "$active_fw" == "ufw" ]; then
+                    echo -e "   ${C_GRAY}[执行代码] ufw allow ${port}/tcp${C_RESET}"
+                    ufw allow "${port}/tcp" >/dev/null 2>&1
+                elif [ "$active_fw" == "firewalld" ]; then
+                    echo -e "   ${C_GRAY}[执行代码] firewall-cmd --permanent --add-port=${port}/tcp && firewall-cmd --reload${C_RESET}"
+                    firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1
+                    firewall-cmd --reload >/dev/null 2>&1
+                elif [ "$active_fw" == "iptables" ]; then
+                    echo -e "   ${C_GRAY}[执行代码] iptables -I INPUT -p tcp --dport ${port} -j ACCEPT${C_RESET}"
+                    iptables -I INPUT -p tcp --dport "${port}" -j ACCEPT >/dev/null 2>&1
+                    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+                fi
+                echo -e "   ${C_GREEN}✅ 验证一下,已放开权限${C_RESET}"
+            fi
+        done
+    fi
+
     echo -e "\n${C_YELLOW}💡 强烈建议：${C_RESET}"
     echo -e "在执行选项 [20 一键禁用 root 和 22 端口] 之前，请务必【立即开启一个新的 SSH 终端】！"
     echo -e "使用您创建的【非 root 账号】和【新端口】尝试登录。确认连接成功且可以通过 'sudo -i' 提权后，再执行 20 选项。"
