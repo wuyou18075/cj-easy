@@ -176,7 +176,7 @@ run_create_user() {
     echo -e "${LINE_GRAY}"
 
     if [ "$user_count" -eq 0 ]; then
-        read -p "当前仅存在 root 及其它系统用户，是否创建一个具有 root 权限的个人新用户? [y/n] (回车默认 y): " do_create
+        read -p "当前仅存在 root 及其它系统用户，是否创建一个具有免密 root 权限的个人新用户? [y/n] (回车默认 y): " do_create
         if [[ -n "$do_create" && ! "$do_create" =~ ^[Yy]$ ]]; then
             return
         fi
@@ -196,7 +196,6 @@ run_create_user() {
                     break
                 elif [ "$u_opt" == "1" ]; then
                     read -p "请输入用户 $u 的密码 (明文): " u_pass
-                    # 确保 sshpass 工具就位
                     if ! command -v sshpass &> /dev/null; then apt-get install -y sshpass 2>/dev/null || yum install -y sshpass 2>/dev/null; fi
                     
                     echo -e "${C_CYAN}⏳ 正在发起本地环回登录验证...${C_RESET}"
@@ -205,12 +204,12 @@ run_create_user() {
                     else
                         echo -e "${C_YELLOW}❌ 验证失败！可能是密码错误或账户被禁止 SSH 登录。${C_RESET}"
                     fi
-                    # 验证后跳出当前用户的死循环，进入下一个用户
                     break
                 elif [ "$u_opt" == "2" ]; then
                     read -p "⚠️ 确认彻底删除用户 $u 及其主目录? [y/n]: " confirm_del
                     if [[ "$confirm_del" =~ ^[Yy]$ ]]; then
                         userdel -r "$u" 2>/dev/null
+                        rm -f /etc/sudoers.d/"$u"
                         echo -e "${C_GREEN}✅ 用户 $u 已被彻底删除！${C_RESET}"
                     fi
                     break
@@ -219,13 +218,13 @@ run_create_user() {
         done
         
         echo -e "${LINE_GRAY}"
-        read -p "管理环节结束，是否需要再创建一个全新具有 root 权限的个人用户? [y/n] (回车默认 y): " do_create
+        read -p "管理环节结束，是否需要再创建一个全新具有免密 root 权限的个人用户? [y/n] (回车默认 y): " do_create
         if [[ -n "$do_create" && ! "$do_create" =~ ^[Yy]$ ]]; then
             return
         fi
     fi
 
-    # 新建个人用户逻辑
+    # 新建个人用户逻辑（注入免密提权 NOPASSWD）
     while true; do
         read -p "请输入拟创建的新用户名: " new_user
         if [ -z "$new_user" ]; then continue; fi
@@ -241,10 +240,10 @@ run_create_user() {
             useradd -m -s /bin/bash "$new_user"
             echo "$new_user:$pass1" | chpasswd
             
-            # 赋予 sudo 权限，实现 sudo -i 无缝提权 root
-            echo "$new_user ALL=(ALL:ALL) ALL" > /etc/sudoers.d/"$new_user"
+            # 核心升级：配置该用户在执行 sudo 时无须输入任何密码
+            echo "$new_user ALL=(ALL:ALL) NOPASSWD: ALL" > /etc/sudoers.d/"$new_user"
             chmod 0440 /etc/sudoers.d/"$new_user"
-            echo -e "${C_GREEN}✅ 用户 $new_user 创建成功，连接后可通过 'sudo -i' 直接提权！${C_RESET}"
+            echo -e "${C_GREEN}✅ 用户 $new_user 创建成功，已配置免密 sudo 权限！连接后输入 'sudo -i' 无需密码即可切换为 root。${C_RESET}"
             break
         else
             echo -e "${C_YELLOW}❌ 密码不匹配或为空，请重新输入！${C_RESET}"
@@ -261,10 +260,10 @@ run_disable_root() {
         fi
     fi
 
-    echo -e "${C_YELLOW}⚠️ 警告：为防止服务器彻底失联，执行剥夺 root 权限前必须前置验证一个非 root 账户的存活情况！${C_RESET}"
+    echo -e "${C_YELLOW}⚠️ 警告：为防止服务器彻底失联，必须强验证非 root 账户的 SSH 登录以及 sudo -i 免密提权能力！${C_RESET}"
     local current_port=$(sshd -T 2>/dev/null | grep -i '^port ' | awk '{print $2}' || echo "22")
     
-    read -p "请输入一个非 root 用户名用于验证连接: " v_user
+    read -p "请输入要用于接管系统的非 root 用户名: " v_user
     if [ -z "$v_user" ] || [ "$v_user" == "root" ]; then
         echo -e "${C_YELLOW}❌ 用户输入不合法或仍为 root，操作已紧急中止。${C_RESET}"
         return
@@ -274,16 +273,23 @@ run_disable_root() {
     
     if ! command -v sshpass &> /dev/null; then apt-get install -y sshpass 2>/dev/null || yum install -y sshpass 2>/dev/null; fi
 
-    echo -e "${C_CYAN}⏳ 正在通过 127.0.0.1:$current_port 检测端口通透状态及验证该用户...${C_RESET}"
-    if sshpass -p "$v_pass" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$current_port" "$v_user"@127.0.0.1 "echo 'VERIFY_SUCCESS'" 2>/dev/null | grep -q "VERIFY_SUCCESS"; then
-        echo -e "${C_GREEN}✅ SSH 端口正常运作，非 root 账号验证通过！${C_RESET}"
+    echo -e "${C_CYAN}⏳ 阶段 1：正在验证该用户 SSH 连通性...${C_RESET}"
+    # 模拟登录并测试执行 `sudo -i whoami` 来看是否成功免密提权切换到 root 账户
+    local test_cmd="sudo -i whoami"
+    local run_result=$(sshpass -p "$v_pass" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$current_port" "$v_user"@127.0.0.1 "$test_cmd" 2>/dev/null | tr -d '\r\n')
+
+    if [ "$run_result" == "root" ]; then
+        echo -e "${C_GREEN}✅ 强验证成功！该账号 SSH 连接正常，且能无缝通过 'sudo -i' 切换至 root 权限！${C_RESET}"
         echo -e "${C_CYAN}⏳ 正在剥夺 root 的 SSH 直连权限...${C_RESET}"
         sed -i -E 's/^#?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
         systemctl restart sshd || systemctl restart ssh
-        echo -e "${C_GREEN}✅ root 远程登录已被彻底封死，系统安全性已满配！${C_RESET}"
+        echo -e "${C_GREEN}✅ root 远程登录已被彻底封死，安全保障已全面就绪！${C_RESET}"
     else
-        echo -e "${C_YELLOW}❌ 防火墙阻断 或 账号/密码严重错误！${C_RESET}"
-        echo -e "${C_YELLOW}为防止您被反锁在服务器外，禁止 root 操作已被系统强行熔断并取消！请排查账户问题后再试。${C_RESET}"
+        echo -e "${C_YELLOW}❌ 强验证失败！原因可能是：${C_RESET}"
+        echo -e " 1. 账号或密码输入有误。"
+        echo -e " 2. 防火墙拦截了该端口的本地回环请求。"
+        echo -e " 3. 该用户【没有免密提权配置】或 sudo 发生错误（测试返回值: '$run_result'，预期值: 'root'）。"
+        echo -e "${C_YELLOW}💡 为了防止您被反锁在服务器外面，封禁 root 操作已被系统强行熔断拦截并取消！请务必排查或到选项 8 重新赋予权限。${C_RESET}"
     fi
 }
 
@@ -302,8 +308,8 @@ while true; do
     echo -e "4) 同步并锁死北京时间"
     echo -e "6) 监测内存不足 4G 自动装载 1G 虚拟内存"
     echo -e "7) 更改并放行 SSH 端口"
-    echo -e "8) 创建 / 遍历管理个人非 root 用户 (赋予无缝 sudo -i 提权)"
-    echo -e "9) 强验证非 root 连接状态并封禁 root 登录直连"
+    echo -e "8) 创建 / 遍历管理个人非 root 用户 (赋予免密 sudo -i 权限)"
+    echo -e "9) 强验证非 root 连接状态及 sudo -i 提权能力并封禁 root 直连"
     echo -e "10) 一键应用系统初始化环境 (静默跑通 2、3、4、6 项)"
     echo -e "0) 退出本脚本"
     echo -e "${LINE_GRAY}"
