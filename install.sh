@@ -20,7 +20,7 @@ REMOTE_SYS_TOOL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads
 REMOTE_FIREWALL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/firewall-tool.sh"
 REMOTE_TCP="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/tcp.sh"
 REMOTE_DOCKER="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-install-dp.sh"
-REMOTE_KOMARI="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-Komari.sh"
+REMOTE_DOCKER_TOOL="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-tool-install.sh"
 
 # 更新函数
 perform_update() {
@@ -582,7 +582,7 @@ while true; do
         6) menu_nginx_management ;;
         7) menu_certificate_management ;;
         8) 
-            bash <(curl -fsSL "${REMOTE_KOMARI}?v=$(date +%s)")
+            bash <(curl -fsSL "${REMOTE_DOCKER_TOOL}?v=$(date +%s)")
             ;;
         96)
             echo "🚧 功能占位开发中..."; sleep 1.5 
