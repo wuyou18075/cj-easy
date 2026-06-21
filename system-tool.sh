@@ -208,7 +208,6 @@ _create_user_logic() {
 }
 
 run_user_manage() {
-    # 提取所有系统用户 (包含 root 和常规普通用户)
     local users_arr=($(awk -F':' '{ if ($3 == 0 || ($3 >= 1000 && $3 <= 60000 && $1 != "nobody")) print $1 }' /etc/passwd))
     
     echo -e "\n${C_CYAN}当前系统用户列表:${C_RESET}"
@@ -289,17 +288,37 @@ run_lockdown() {
         LOGIN_USER=${SUDO_USER:-$(whoami)}
     fi
     
-    # 【核心修复】：穿透 sudo 和 subshell 向上层层追溯，精准提取真实的 SSH 端口
-    local CONN_PORT=""
+    local CONN_PORT=$(echo "$SSH_CONNECTION" | awk '{print $4}')
+    if [ -z "$CONN_PORT" ]; then
+        CONN_PORT=$(echo "$SSH_CLIENT" | awk '{print $3}')
+    fi
+    
+    # 【核心修复】：穿透嵌套 Shell，向上层层追溯，直至揪出 sshd 的真实连接
     local check_pid=$$
-    while [ "$check_pid" -gt 1 ]; do
-        # 尝试从父进程环境变量中抓取 SSH_CONNECTION
-        CONN_PORT=$(cat /proc/$check_pid/environ 2>/dev/null | tr '\0' '\n' | grep '^SSH_CONNECTION=' | awk '{print $4}')
+    # 修复正则表达式保护机制，防止空字符串或非数字参与数学计算报错
+    while [[ -n "$check_pid" && "$check_pid" =~ ^[0-9]+$ && "$check_pid" -gt 1 ]]; do
+        if [ -z "$CONN_PORT" ]; then
+            # 利用 sudo 读取底层内存中的环境变量 (防权限隔绝)
+            CONN_PORT=$(sudo cat /proc/"$check_pid"/environ 2>/dev/null | tr '\0' '\n' | grep '^SSH_CONNECTION=' | head -n 1 | awk '{print $4}')
+        fi
+        
+        # 针对 tmux 的特判：如果跑在 tmux 里面，顺便查一下 tmux 的环境缓存
+        if [ -z "$CONN_PORT" ] && [ -n "$TMUX" ] && command -v tmux &> /dev/null; then
+            CONN_PORT=$(tmux show-env SSH_CONNECTION 2>/dev/null | grep '^SSH_CONNECTION=' | awk -F'=' '{print $2}' | awk '{print $4}')
+        fi
+        
         if [ -n "$CONN_PORT" ]; then
             break
         fi
-        # 向上追溯父进程 PID
-        check_pid=$(awk '/^PPID:/ {print $2}' /proc/$check_pid/status 2>/dev/null || echo 0)
+        
+        # 修正: 内核状态文件中是 PPid (小写 i)，大写 PPID 匹配不到会导致返回空值断裂
+        local next_pid=$(awk '/^[Pp][Pp][Ii][Dd]:/ {print $2}' /proc/"$check_pid"/status 2>/dev/null)
+        
+        # 如果获取不到或陷入死循环，立刻熔断
+        if [[ -z "$next_pid" || "$next_pid" == "$check_pid" ]]; then
+            break
+        fi
+        check_pid="$next_pid"
     done
     
     local pass_check=true
@@ -307,8 +326,8 @@ run_lockdown() {
     echo -e "1. 探测当前操作登录用户: ${C_GREEN}$LOGIN_USER${C_RESET}"
     
     if [ -z "$CONN_PORT" ]; then
-        echo -e "2. 探测当前 SSH 登录接收端口: ${C_YELLOW}未知 (无法溯源，可能运行于 tmux/screen 或特殊子环境中)${C_RESET}"
-        echo -e "${C_YELLOW}❌ 监测不通过: 无法确切获取您的连接端口！绝对不可以在未知端口状态下盲目封禁。${C_RESET}"
+        echo -e "2. 探测当前 SSH 登录接收端口: ${C_YELLOW}未知 (无法溯源)${C_RESET}"
+        echo -e "${C_YELLOW}❌ 监测不通过: 即使强行穿透了进程树仍无法确切获取您的连接端口。保护机制启动，绝不在未知状态下盲目封禁！${C_RESET}"
         pass_check=false
     else
         echo -e "2. 探测当前 SSH 登录接收端口: ${C_GREEN}$CONN_PORT${C_RESET}"
