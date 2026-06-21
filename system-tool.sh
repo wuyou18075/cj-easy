@@ -268,6 +268,17 @@ run_check_ssh_firewall() {
     echo -e "\n${C_YELLOW}💡 强烈建议：${C_RESET}"
     echo -e "在执行选项 [20 一键禁用 root 和 22 端口] 之前，请务必【立即开启一个新的 SSH 终端】！"
     echo -e "使用您创建的【非 root 账号】和【新端口】尝试登录。确认连接成功且可以通过 'sudo -i' 提权后，再执行 20 选项。"
+    echo -e "${LINE_GRAY}"
+    
+    read -p "是否立即退出当前 SSH 连接，以便使用非 root 账号重试登录? [y/n] (回车默认 y): " do_exit
+    if [[ -z "$do_exit" || "$do_exit" =~ ^[Yy]$ ]]; then
+        echo -e "${C_GREEN}⏳ 正在断开连接... 请使用新账号和新端口重新登录服务器！${C_RESET}"
+        sleep 1
+        # 通过强杀当前 Shell 的父进程来断开 SSH 会话
+        kill -9 $PPID
+    else
+        echo -e "${C_GRAY}已取消退出，请手动验证后再执行 20 选项。${C_RESET}"
+    fi
 }
 
 run_lockdown() {
@@ -341,7 +352,7 @@ while true; do
     echo -e "${C_BLUE}⚡ 系统配置极速工具${C_RESET}"
     echo -e "当前时间: $(date "+%Y-%m-%d %H:%M:%S")"
     echo -e "${LINE_GRAY}"
-    echo -e "1) 依次执行应用全部 (1-8项连贯执行)"
+    echo -e "1) 应用全部防爆破 (1-9)"
     echo -e "2) 基础工具包极速部署"
     echo -e "3) 更改内核主机名"
     echo -e "4) 同步并锁死北京时间"
@@ -349,7 +360,7 @@ while true; do
     echo -e "7) 添加 SSH 端口并放行防火墙"
     echo -e "8) 用户管理"
     echo -e "9) 检验 SSH 端口与防火墙状态"
-    echo -e "10) 一键应用系统初始化环境 (静默跑通 2、3、4、6 项)"
+    echo -e "10) 简单初始化环(2,3,4,6)"
     echo -e "20) 一键禁用 root 和 22端口登录"
     echo -e "0) 退出本脚本"
     echo -e "${LINE_GRAY}"
@@ -371,7 +382,10 @@ while true; do
         run_ssh_port_add "true"
         echo -e "${LINE_GRAY}"
         run_user_manage
-        read -p "阶段流程结束，请先执行选项 9 核对状态，按回车返回主菜单..." temp
+        echo -e "${LINE_GRAY}"
+        run_check_ssh_firewall
+        # 因为此处可能会强制结束 SSH，无需额外 pause
+        read -p "回车返回..." temp
     elif [ "$SYS_OPT" == "2" ]; then
         run_tool_installation "false"
     elif [ "$SYS_OPT" == "3" ]; then
@@ -402,7 +416,7 @@ while true; do
         echo -e "${LINE_GRAY}"
         run_swap_check "true"
         echo -e "${LINE_GRAY}"
-        echo -e "${C_GREEN}🚀 基础环境初始化 1-4 步(工具/主机名/时间/Swap)已全部执行完毕！${C_RESET}"
+        echo -e "${C_GREEN}🚀 基础环境初始化 2,3,4,6 步已全部执行完毕！${C_RESET}"
         read -p "回车返回..." temp
     elif [ "$SYS_OPT" == "20" ]; then
         run_lockdown
