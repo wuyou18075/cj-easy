@@ -2,7 +2,7 @@
 
 # ==========================================
 # 脚本名称: docker-tool-install.sh
-# 功能描述: Docker 综合工具箱与跨节点迁移控制中心
+# 功能描述: Docker 动态云商店工具箱与全能迁移中心
 # ==========================================
 
 # 全局颜色与线框定义
@@ -16,99 +16,214 @@ C_RESET="\e[0m"
 LINE_GRAY="${C_GRAY}---------------------------------------------------------${C_RESET}"
 
 # ==========================================
-# 全局目录规则定义区
+# 全局目录规则与云端链接定义区
 # ==========================================
 DOCKER_ROOT="/app/docker"
 YAML_FILE="${DOCKER_ROOT}/docker-compose.yml"
 YAML_BAK_DIR="${DOCKER_ROOT}/yaml-bak"
-REMOTE_KOMARI="https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-Komari.sh"
+REMOTE_TOOLS_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/docker-compose-tools.yml"
+TEMP_TOOLS="/tmp/remote_docker_tools.yml"
 
 # 初始化环境依赖
 mkdir -p "$DOCKER_ROOT"
 mkdir -p "$YAML_BAK_DIR"
 
 # ==========================================
-# 核心功能模块: YAML 规则与冲突管控
+# 核心功能: 动态云端应用商店拉取与解析
 # ==========================================
 
-# 规则 1: 配置文件自动备份并仅保留最近 10 份
+fetch_remote_tools() {
+    echo -e "${C_CYAN}🔄 正在与云端应用库同步数据...${C_RESET}"
+    curl -sSL -m 10 "$REMOTE_TOOLS_URL" -o "$TEMP_TOOLS"
+    if [ ! -s "$TEMP_TOOLS" ]; then
+        echo -e "${C_RED}❌ 云端仓库拉取失败，请检查网络或 URL 是否正确。${C_RESET}"
+        sleep 2
+    fi
+}
+
+# 规则: 配置文件自动备份并仅保留最近 10 份
 backup_compose_yaml() {
     if [ -f "$YAML_FILE" ]; then
         local BAK_NAME="${YAML_BAK_DIR}/docker-compose-bak-$(date +%Y%m%d%H%M%S).yml"
         cp "$YAML_FILE" "$BAK_NAME"
-        # 强制清理：只保留最新的 10 个备份
         ls -t "$YAML_BAK_DIR"/docker-compose-bak-*.yml 2>/dev/null | tail -n +11 | xargs -I {} rm -f "{}"
-        echo -e "${C_CYAN}📦 当前配置已自动备份至: ${BAK_NAME}${C_RESET}"
+        echo -e "${C_GRAY}📦 原配置已留存快照: $(basename "$BAK_NAME")${C_RESET}"
     fi
 }
 
-# 规则 2: 处理远程模块拉取与冲突校验
-install_remote_module() {
-    clear
-    echo -e "${C_BLUE}⚡ 从远程模块安装新服务${C_RESET}"
-    echo -e "${LINE_GRAY}"
-    read -p "🔗 请输入远程 docker-compose.yml 的直链 URL: " REMOTE_URL
-    if [ -z "$REMOTE_URL" ]; then echo -e "${C_RED}❌ URL不能为空${C_RESET}"; sleep 1; return; fi
+# ==========================================
+# 核心功能模块: 动态应用安装与生命周期管理
+# ==========================================
 
-    local TEMP_YAML="/tmp/docker-compose-remote-temp.yml"
-    echo -e "🔄 正在拉取远程配置..."
-    curl -sSL "$REMOTE_URL" -o "$TEMP_YAML"
+_install_service() {
+    local NAME="$1"
+    local R_BLOCK="$2"
+    local S_KEY="$3"
+
+    clear
+    echo -e "${C_CYAN}📥 正在初始化 [ $NAME ] 部署向导...${C_RESET}"
+    echo -e "${LINE_GRAY}"
     
-    if [ ! -s "$TEMP_YAML" ]; then
-        echo -e "${C_RED}❌ 拉取失败，请检查网络或链接。${C_RESET}"; sleep 1.5; return
-    fi
+    # 动态解析所有需要交互填写的参数
+    mapfile -t PARAM_LINES < <(echo "$R_BLOCK" | grep -oP "^#PARAM_[a-zA-Z0-9_]+:[^\r\n]+")
+    
+    local CONF_BLOCK="$R_BLOCK"
+    for p in "${PARAM_LINES[@]}"; do
+        if [ -z "$p" ]; then continue; fi
+        local P_KEY=$(echo "$p" | cut -d':' -f1 | sed 's/^#//')
+        local P_DESC=$(echo "$p" | cut -d':' -f2-)
+        read -p "✏️  请输入 $P_DESC : " U_IN
+        # 注入用户输入，使用管道符作为定界符防止路径斜杠干扰
+        CONF_BLOCK=$(echo "$CONF_BLOCK" | sed "s|{$P_KEY}|$U_IN|g")
+    done
 
-    # 如果本地没有任何配置，直接采用
+    # 剔除所有的控制标签，生成纯净的 yaml 块
+    local CLEAN_BLOCK=$(echo "$CONF_BLOCK" | grep -vE "^#(START|END|NAME|PARAM_)")
+
+    # 配置合并与冲突管控逻辑
+    echo -e "${LINE_GRAY}"
     if [ ! -f "$YAML_FILE" ]; then
-        mv "$TEMP_YAML" "$YAML_FILE"
-        echo -e "${C_GREEN}✅ 首次部署，已直接写入用户本地配置。${C_RESET}"
-        sleep 1.5; return
-    fi
-
-    # 存在本地配置，启动冲突检测
-    echo -e "🔎 正在与本地配置进行冲突比对..."
-    if cmp -s "$TEMP_YAML" "$YAML_FILE"; then
-        echo -e "${C_GREEN}✅ 远程配置与本地完全一致，无需合并。${C_RESET}"
-        rm -f "$TEMP_YAML"
-        sleep 1.5; return
-    fi
-
-    # 发生不一致，进入冲突裁决
-    clear
-    echo -e "${C_YELLOW}⚠️ 警告：检测到本地配置与远程模块存在冲突！${C_RESET}"
-    echo -e "${LINE_GRAY}"
-    diff -u --color=always "$YAML_FILE" "$TEMP_YAML" | head -n 30
-    echo -e "${LINE_GRAY}"
-    echo -e "1) 手动解决 (进入编辑器对照合并冲突)"
-    echo -e "2) 直接丢弃本地配置 (完全覆盖为远程最新配置)"
-    echo -e "0) 取消安装 (退出)"
-    echo -e "${LINE_GRAY}"
-    read -p "请选择冲突处理方案 [0-2]: " CONFLICT_OPT
-
-    backup_compose_yaml
-
-    if [ "$CONFLICT_OPT" == "1" ]; then
-        # 借助 vimdiff 或 nano 手动合并
-        echo -e "打开本地配置，请参考刚才的差异日志进行手动添加..."
-        sleep 1.5
-        nano "$YAML_FILE"
-        echo -e "${C_GREEN}✅ 手动合并结束。${C_RESET}"
-        rm -f "$TEMP_YAML"
-    elif [ "$CONFLICT_OPT" == "2" ]; then
-        mv "$TEMP_YAML" "$YAML_FILE"
-        echo -e "${C_GREEN}✅ 已直接丢弃旧版本，采用最新远程模块覆盖！${C_RESET}"
+        echo "version: '3.8'" > "$YAML_FILE"
+        echo "" >> "$YAML_FILE"
+        echo "services:" >> "$YAML_FILE"
+        echo "$CLEAN_BLOCK" >> "$YAML_FILE"
+        echo -e "${C_GREEN}✅ 检测到本地为空，已创建根配置并写入模块！${C_RESET}"
     else
-        echo -e "操作取消。"
-        rm -f "$TEMP_YAML"
+        # 检索服务键值是否已存在于本地 (例如 "  komari:")
+        if grep -qE "^  ${S_KEY}:" "$YAML_FILE"; then
+            echo -e "${C_YELLOW}⚠️ 警告：检测到本地文件已存在 [ ${S_KEY} ] 服务的配置冲突！${C_RESET}"
+            echo "1) 手动解决 (屏幕将展示新模块，随后自动打开 nano 供您合并)"
+            echo "2) 直接丢弃本地配置 (危险：将完全覆盖重写文件，旧有其他服务将被清空！)"
+            echo "0) 取消安装"
+            echo -e "${LINE_GRAY}"
+            read -p "请选择冲突裁决方案 [0-2]: " c_opt
+            
+            if [ "$c_opt" == "1" ]; then
+                backup_compose_yaml
+                clear
+                echo -e "${C_CYAN}========== 即将注入的新模块代码 ==========${C_RESET}"
+                echo "$CLEAN_BLOCK"
+                echo -e "${C_CYAN}==========================================${C_RESET}"
+                echo -e "💡 提示：请参考上方的代码，在接下来的编辑器中修改或合并您的本地旧配置。"
+                read -p "准备就绪后，按回车键唤醒 nano 编辑器..." temp
+                nano "$YAML_FILE"
+                echo -e "${C_GREEN}✅ 手动合并结束。${C_RESET}"
+            elif [ "$c_opt" == "2" ]; then
+                backup_compose_yaml
+                echo "version: '3.8'" > "$YAML_FILE"
+                echo "" >> "$YAML_FILE"
+                echo "services:" >> "$YAML_FILE"
+                echo "$CLEAN_BLOCK" >> "$YAML_FILE"
+                echo -e "${C_GREEN}✅ 已物理清除旧档案，全新模块写入成功！${C_RESET}"
+            else
+                echo -e "${C_GRAY}操作已取消。${C_RESET}"
+                return
+            fi
+        else
+            backup_compose_yaml
+            echo "$CLEAN_BLOCK" >> "$YAML_FILE"
+            echo -e "${C_GREEN}✅ 无冲突！已将新模块无缝拼接到本地配置末尾。${C_RESET}"
+        fi
     fi
-    read -p "回车继续..." temp
+
+    # 唤醒容器启动流程
+    echo -e "${C_CYAN}🚀 正在调用 Docker 引擎拉起服务...${C_RESET}"
+    cd "$DOCKER_ROOT" || return
+    docker compose up -d "$S_KEY"
+    echo -e "${C_GREEN}🎉 部署动作全部完成！${C_RESET}"
+    read -p "按回车键返回上级菜单..." temp
 }
 
+manage_service() {
+    local SELECTED_NAME="$1"
+    # 精准抽取对应的 START 和 END 之间的文本块
+    local RAW_BLOCK=$(awk "/#START/{f=1; buf=\"\"} f{buf=buf \$0 ORS} /#END/{if(buf ~ /#NAME:${SELECTED_NAME}/) {print buf; exit} f=0}" "$TEMP_TOOLS")
+    
+    if [ -z "$RAW_BLOCK" ]; then
+        echo -e "${C_RED}❌ 未能从远程模板中解析到该应用数据！${C_RESET}"
+        sleep 1; return
+    fi
+
+    # 提取 docker-compose 中真实的服务组件标识 (如 "komari")
+    local SVC_KEY=$(echo "$RAW_BLOCK" | grep -E "^  [a-zA-Z0-9_-]+:" | head -n 1 | awk -F':' '{print $1}' | tr -d ' \r')
+
+    while true; do
+        clear
+        echo -e "${C_BLUE}⚡ Docker 矩阵应用控制台: ${C_YELLOW}$SELECTED_NAME${C_RESET} (组件映射: $SVC_KEY)"
+        echo -e "${LINE_GRAY}"
+        echo " 1) 安装 (云端参数解析与部署)"
+        echo " 2) 更新镜像 (Pull 最新版本并平滑重启)"
+        echo " 3) 启动 (Start)"
+        echo " 4) 重启 (Restart)"
+        echo " 5) 停止 (Stop)"
+        echo " 6) 卸载 (仅强制清除容器)"
+        echo " 7) 抹除 (深度清除容器及本地挂载目录)"
+        echo " 0) 返回上层大厅"
+        echo -e "${LINE_GRAY}"
+        read -p "请分配操作指令 [0-7]: " SUB_OPT
+
+        case $SUB_OPT in
+            1)
+                _install_service "$SELECTED_NAME" "$RAW_BLOCK" "$SVC_KEY"
+                ;;
+            2)
+                echo -e "${C_CYAN}🔄 正在追溯最新镜像...${C_RESET}"
+                cd "$DOCKER_ROOT" || return
+                docker compose pull "$SVC_KEY"
+                docker compose up -d "$SVC_KEY"
+                read -p "操作完毕，回车继续..." temp
+                ;;
+            3)
+                cd "$DOCKER_ROOT" || return
+                docker compose start "$SVC_KEY" 2>/dev/null || docker compose up -d "$SVC_KEY"
+                read -p "操作完毕，回车继续..." temp
+                ;;
+            4)
+                cd "$DOCKER_ROOT" || return
+                docker compose restart "$SVC_KEY"
+                read -p "操作完毕，回车继续..." temp
+                ;;
+            5)
+                cd "$DOCKER_ROOT" || return
+                docker compose stop "$SVC_KEY"
+                read -p "操作完毕，回车继续..." temp
+                ;;
+            6)
+                echo -e "${C_YELLOW}🗑️ 正在阻断并销毁容器资产...${C_RESET}"
+                cd "$DOCKER_ROOT" || return
+                docker compose stop "$SVC_KEY" 2>/dev/null
+                docker compose rm -f -s "$SVC_KEY" 2>/dev/null
+                echo -e "${C_GREEN}✅ 容器节点已切除。若需清除底层配置代码，请手动使用 nano 修改 yaml 文件。${C_RESET}"
+                read -p "回车继续..." temp
+                ;;
+            7)
+                read -p "⚠️ 极危警告：确定要彻底销毁容器、并强制删除宿主机上的映射数据文件夹吗？[y/N]: " is_del
+                if [[ "$is_del" =~ ^[Yy]$ ]]; then
+                    cd "$DOCKER_ROOT" || return
+                    docker compose stop "$SVC_KEY" 2>/dev/null
+                    docker compose rm -f -s "$SVC_KEY" 2>/dev/null
+                    
+                    # 清扫关联的宿主机目录 (匹配约定规则)
+                    if [ -d "${DOCKER_ROOT}/${SVC_KEY}" ]; then
+                        sudo rm -rf "${DOCKER_ROOT}/${SVC_KEY}"
+                    fi
+                    echo -e "${C_GREEN}✅ 容器及物理数据源已被连根拔起！记得清理 docker-compose.yml 遗留代码。${C_RESET}"
+                else
+                    echo -e "${C_GRAY}数据销毁动作已终止。${C_RESET}"
+                fi
+                read -p "回车继续..." temp
+                ;;
+            0) break ;;
+            *) echo -e "${C_GRAY}❌ 无效代码。${C_RESET}"; sleep 1 ;;
+        esac
+    done
+}
+
+
 # ==========================================
-# 核心功能模块: 跨节点迁移系统 (打包与装载)
+# 核心功能模块: 跨节点迁移系统 (终极打包与物理装载)
 # ==========================================
 
-# 规则 5: 打包当前镜像与挂载数据
 pack_migration_data() {
     clear
     echo -e "${C_BLUE}⚡ 全能数据打包器 (镜像 + Data挂载)${C_RESET}"
@@ -159,7 +274,6 @@ pack_migration_data() {
     read -p "回车继续..." temp
 }
 
-# 规则 6: 迁移文件还原与挂载建立
 load_migration_data() {
     clear
     echo -e "${C_BLUE}⚡ 全能数据装载器 (恢复镜像与挂载)${C_RESET}"
@@ -202,97 +316,53 @@ load_migration_data() {
     echo -e "${C_GREEN}🎉 跨节点资产还原完毕！${C_RESET}"
     echo -e "挂载数据已安全恢复至: ${C_YELLOW}${SVC_DATA_DIR}${C_RESET}"
     echo -e "${C_CYAN}💡 下一步操作指引：${C_RESET}"
-    echo -e "请使用功能列表中的【模块化安装新服务】拉取或手动编辑 ${YAML_FILE}"
-    echo -e "确保已编排此服务的启动参数，随后执行 ${C_YELLOW}docker compose up -d${C_RESET} 即可无缝拉起。 "
+    echo -e "请在上方选单中选择对应的模块进行【1 安装】，系统会在配置生成后自动拉起您还原好的镜像数据！"
     read -p "回车继续..." temp
 }
 
 
 # ==========================================
-# 专属业务模块: Komari 探针管理
+# 交互主入口: 动态商店大厅
 # ==========================================
-menu_komari() {
-    while true; do
-        clear
-        echo -e "${C_BLUE}⚡ Komari 自动化服务监控面板${C_RESET}"
-        echo -e "${LINE_GRAY}"
-        echo -e "1) 一键拉取部署安装"
-        echo -e "2) 热拉取最新镜像更新"
-        echo -e "3) 阻断并彻底卸载服务"
-        echo -e "4) 独立安全归类备份配置文件及项目资产"
-        echo -e "0) 返回上一层"
-        echo -e "${LINE_GRAY}"
-        read -p "选择探针控制令: " K_OPT
 
-        case $K_OPT in
-            1)
-                clear
-                echo -e "${C_BLUE}⚡ 开始初始化 Komari...${C_RESET}"
-                if ! command -v curl &> /dev/null; then
-                    if command -v apt-get &> /dev/null; then sudo apt-get update -y && sudo apt-get install -y curl; fi
-                fi
-                bash <(curl -fsSL "${REMOTE_KOMARI}?v=$(date +%s)")
-                read -p "按回车键继续..." temp
-                ;;
-            2)
-                clear
-                echo -e "${C_CYAN}🔄 正在执行热拉取与平滑重启...${C_RESET}"
-                # 此处适配了新的 DOCKER_ROOT 规范
-                if [ -d "${DOCKER_ROOT}" ] && [ -f "${YAML_FILE}" ]; then
-                    cd "${DOCKER_ROOT}" || exit
-                    docker compose pull komari 2>/dev/null || docker compose pull
-                    docker compose up -d
-                    echo -e "${C_GREEN}✅ 镜像更新并重启完成！${C_RESET}"
-                else
-                    echo -e "${C_YELLOW}⚠️ 未找到全局 compose 配置文件。${C_RESET}"
-                fi
-                read -p "按回车键继续..." temp
-                ;;
-            3)
-                clear
-                read -p "⚠️ 确认要阻断并彻底清除 Komari 服务吗？[y/N]: " IS_DEL
-                if [[ "$IS_DEL" =~ ^[Yy]$ ]]; then
-                    docker stop komari 2>/dev/null
-                    docker rm -f komari 2>/dev/null
-                    echo -e "${C_GREEN}✅ 容器已强力阻断！清理 Compose 配置请移步主菜单的 YAML 配置器。${C_RESET}"
-                fi
-                read -p "按回车键继续..." temp
-                ;;
-            4)
-                # 复用原有的打包逻辑至新的体系内
-                echo -e "${C_CYAN}💡 推荐使用主菜单的【选项 5: 跨节点迁移打包】功能实现完整闭环备份。${C_RESET}"
-                read -p "回车继续..." temp
-                ;;
-            0) break ;;
-            *) echo -e "${C_GRAY}❌ 无效选项。${C_RESET}"; sleep 1 ;;
-        esac
-    done
-}
+# 预检：进入主菜单前强行拉取一次远端工具表
+fetch_remote_tools
 
-
-# ==========================================
-# 交互主入口: Docker 安全百宝箱
-# ==========================================
 while true; do
     clear
-    echo -e "${C_BLUE}⚡ Docker 安全百宝箱 / 综合工具集${C_RESET}"
+    echo -e "${C_BLUE}⚡ Docker 安全百宝箱 / 动态应用矩阵${C_RESET}"
     echo -e "${LINE_GRAY}"
-    echo -e "1) Komari 探针控制中心"
-    echo -e "2) 模块化安装新服务 (YAML 远程拉取/冲突处理)"
-    echo -e "3) 功能占位 (待挂载)"
-    echo -e "5) 跨节点迁移：打包导出容器与挂载数据"
-    echo -e "6) 跨节点迁移：物理读取装载迁移文件"
+    
+    # 动态构建云端提取的模块菜单
+    mapfile -t TOOL_NAMES < <(grep -oP "^#NAME:\K.*" "$TEMP_TOOLS" | tr -d '\r')
+    
+    if [ ${#TOOL_NAMES[@]} -eq 0 ]; then
+        echo -e "${C_YELLOW}⚠️ 暂未捕获到任何云端可用组件，请排查模板格式或网络源。${C_RESET}"
+    else
+        for i in "${!TOOL_NAMES[@]}"; do
+            echo -e "$((i+1))) ${TOOL_NAMES[$i]}"
+        done
+    fi
+    
+    echo -e "\n99) 跨节点迁移：打包导出容器与挂载数据"
+    echo -e "100) 跨节点迁移：物理读取装载迁移文件"
     echo -e "0) 返回主环境"
     echo -e "${LINE_GRAY}"
-    read -p "请注入工具子项编号 [0-6]: " MAIN_OPT
+    read -p "请注入工具子项编号: " MAIN_OPT
 
-    case $MAIN_OPT in
-        1) menu_komari ;;
-        2) install_remote_module ;;
-        3) echo -e "🚧 对应插槽功能正在开发中..."; sleep 1.5 ;;
-        5) pack_migration_data ;;
-        6) load_migration_data ;;
-        0) echo -e "👋 安全退出百宝箱。"; exit 0 ;;
-        *) echo -e "${C_GRAY}❌ 无效的子项编号。${C_RESET}"; sleep 1 ;;
-    esac
+    if [ "$MAIN_OPT" == "0" ]; then
+        echo -e "👋 安全退出百宝箱。"
+        exit 0
+    elif [ "$MAIN_OPT" == "99" ]; then
+        pack_migration_data
+    elif [ "$MAIN_OPT" == "100" ]; then
+        load_migration_data
+    elif [[ "$MAIN_OPT" =~ ^[0-9]+$ ]] && [ "$MAIN_OPT" -gt 0 ] && [ "$MAIN_OPT" -le "${#TOOL_NAMES[@]}" ]; then
+        # 基于用户编号计算数组真实下标并调用管理逻辑
+        target_name="${TOOL_NAMES[$((MAIN_OPT-1))]}"
+        manage_service "$target_name"
+    else
+        echo -e "${C_GRAY}❌ 无效的指令输入。${C_RESET}"
+        sleep 1
+    fi
 done

@@ -1,15 +1,35 @@
 version: '3.8'
 
 services:
-  #探针监控
+#START
+#NAME:探针监控komari
+#PARAM_PORT:端口
+#PARAM_ADMIN_USERNAME:管理员用户名
+#PARAM_ADMIN_PASSWORD:管理员密码  
   komari:
     image: ghcr.io/komari-monitor/komari:latest
     container_name: komari
     restart: always
     ports:
-      - "127.0.0.1:9900:25774"
+      - "127.0.0.1:{PARAM_PORT}:25774"
     volumes:
       - ./komari:/app/data
     environment:
-      - ADMIN_USERNAME="用户名"
-      - ADMIN_PASSWORD="用户密码"
+      - ADMIN_USERNAME={PARAM_ADMIN_USERNAME}
+      - ADMIN_PASSWORD={PARAM_ADMIN_PASSWORD}
+#END
+#START 
+#NAME:npm服务
+#PARAM_PORT:端口
+  npm:
+    image: node:18-alpine
+    container_name: npm
+    restart: always
+    working_dir: /app
+    ports:
+      - "{PARAM_PORT}:80"
+    volumes:
+      - ./npm:/app
+    command: sh -c "npm install && npm start"
+#END
+
