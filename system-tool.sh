@@ -282,51 +282,69 @@ run_check_ssh_firewall() {
 run_lockdown() {
     echo -e "\n${C_CYAN}⏳ 正在进行执行环境的安全合规监测...${C_RESET}"
     
-    # 提取当前登录发起用户 (过滤 sudo 环境导致的虚假 root)
+    # 提取当前登录发起用户
     local LOGIN_USER=$(logname 2>/dev/null)
     if [ -z "$LOGIN_USER" ]; then
         LOGIN_USER=${SUDO_USER:-$(whoami)}
     fi
     
-    local CONN_PORT=$(echo "$SSH_CONNECTION" | awk '{print $4}')
-    if [ -z "$CONN_PORT" ]; then
-        CONN_PORT=$(echo "$SSH_CLIENT" | awk '{print $3}')
+    # 初始化端口变量
+    local CONN_PORT=""
+
+    # 尝试 1：直接从环境变量获取 (兼顾 SSH_CONNECTION 和 SSH_CLIENT)
+    local env_conn="${SSH_CONNECTION:-$SSH_CLIENT}"
+    if [ -n "$env_conn" ]; then
+        # 无论多少个字段，取最后一个字段 ($NF) 必定是服务端接收端口
+        CONN_PORT=$(echo "$env_conn" | awk '{print $NF}')
     fi
-    
-    # 【核心修复】：穿透嵌套 Shell，向上层层追溯，直至揪出 sshd 的真实连接
-    local check_pid=$$
-    # 修复正则表达式保护机制，防止空字符串或非数字参与数学计算报错
-    while [[ -n "$check_pid" && "$check_pid" =~ ^[0-9]+$ && "$check_pid" -gt 1 ]]; do
-        if [ -z "$CONN_PORT" ]; then
-            # 利用 sudo 读取底层内存中的环境变量 (防权限隔绝)
-            CONN_PORT=$(sudo cat /proc/"$check_pid"/environ 2>/dev/null | tr '\0' '\n' | grep '^SSH_CONNECTION=' | head -n 1 | awk '{print $4}')
+
+    # 尝试 2：针对 tmux 虚拟终端的缓存穿透
+    if [ -z "$CONN_PORT" ] && [ -n "$TMUX" ] && command -v tmux &> /dev/null; then
+        CONN_PORT=$(tmux show-env SSH_CONNECTION 2>/dev/null | grep '^SSH_CONNECTION=' | awk -F'=' '{print $2}' | awk '{print $4}')
+    fi
+
+    # 尝试 3：物理映射查杀 (最稳妥的兜底方案)
+    # 利用 who -m 提取当前 TTY 接入的真实来源 IP，再用 ss / netstat 反查服务器建立连接的本地监听端口
+    if [ -z "$CONN_PORT" ]; then
+        local client_ip=$(who -m 2>/dev/null | awk '{print $NF}' | tr -d '()')
+        if [ -n "$client_ip" ] && [[ "$client_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$client_ip" =~ : ]]; then
+            if command -v ss &> /dev/null; then
+                CONN_PORT=$(sudo ss -tn state established 2>/dev/null | grep "$client_ip" | awk '{print $4}' | awk -F':' '{print $NF}' | head -n 1)
+            elif command -v netstat &> /dev/null; then
+                CONN_PORT=$(sudo netstat -tn 2>/dev/null | grep ESTABLISHED | grep "$client_ip" | awk '{print $4}' | awk -F':' '{print $NF}' | head -n 1)
+            fi
         fi
-        
-        # 针对 tmux 的特判：如果跑在 tmux 里面，顺便查一下 tmux 的环境缓存
-        if [ -z "$CONN_PORT" ] && [ -n "$TMUX" ] && command -v tmux &> /dev/null; then
-            CONN_PORT=$(tmux show-env SSH_CONNECTION 2>/dev/null | grep '^SSH_CONNECTION=' | awk -F'=' '{print $2}' | awk '{print $4}')
-        fi
-        
-        if [ -n "$CONN_PORT" ]; then
-            break
-        fi
-        
-        # 修正: 内核状态文件中是 PPid (小写 i)，大写 PPID 匹配不到会导致返回空值断裂
-        local next_pid=$(awk '/^[Pp][Pp][Ii][Dd]:/ {print $2}' /proc/"$check_pid"/status 2>/dev/null)
-        
-        # 如果获取不到或陷入死循环，立刻熔断
-        if [[ -z "$next_pid" || "$next_pid" == "$check_pid" ]]; then
-            break
-        fi
-        check_pid="$next_pid"
-    done
+    fi
+
+    # 尝试 4：安全强化的进程树溯源 (彻底修复 integer expression expected 报错)
+    if [ -z "$CONN_PORT" ]; then
+        local check_pid=$$
+        # 强制使用正则校验 pid 必须为纯数字，才能进入内部循环和后续数学比对 (-le 1)
+        while [ -n "$check_pid" ] && echo "$check_pid" | grep -qE '^[0-9]+$'; do
+            if [ "$check_pid" -le 1 ]; then 
+                break 
+            fi
+            
+            local env_port=$(sudo cat /proc/"$check_pid"/environ 2>/dev/null | tr '\0' '\n' | grep '^SSH_CONNECTION=' | head -n 1 | awk '{print $4}')
+            if [ -n "$env_port" ]; then
+                CONN_PORT="$env_port"
+                break
+            fi
+            
+            local next_pid=$(awk '/^[Pp][Pp][Ii][Dd]:/ {print $2}' /proc/"$check_pid"/status 2>/dev/null)
+            if [ -z "$next_pid" ] || [ "$next_pid" == "$check_pid" ]; then
+                break
+            fi
+            check_pid="$next_pid"
+        done
+    fi
     
     local pass_check=true
 
     echo -e "1. 探测当前操作登录用户: ${C_GREEN}$LOGIN_USER${C_RESET}"
     
     if [ -z "$CONN_PORT" ]; then
-        echo -e "2. 探测当前 SSH 登录接收端口: ${C_YELLOW}未知 (无法溯源)${C_RESET}"
+        echo -e "2. 探测当前 SSH 登录接收端口: ${C_YELLOW}未知 (无法溯源，可能运行于深层嵌套或特殊子环境中)${C_RESET}"
         echo -e "${C_YELLOW}❌ 监测不通过: 即使强行穿透了进程树仍无法确切获取您的连接端口。保护机制启动，绝不在未知状态下盲目封禁！${C_RESET}"
         pass_check=false
     else
@@ -356,18 +374,18 @@ run_lockdown() {
     if [[ "$confirm_lock" =~ ^[Yy]$ ]]; then
         echo -e "${C_CYAN}⏳ 正在吊销特权及擦除高危端口...${C_RESET}"
         
-        # 禁用 root
+        # 补充必要的 sudo 权限提升，防止普通账号无权修改核心配置
         if grep -q "PermitRootLogin" /etc/ssh/sshd_config; then
-            sed -i -E 's/^#?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
+            sudo sed -i -E 's/^#?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
         else
-            echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+            echo "PermitRootLogin no" | sudo tee -a /etc/ssh/sshd_config >/dev/null
         fi
         
         # 清理 22 端口
-        sed -i '/^Port 22$/d' /etc/ssh/sshd_config
-        sed -i '/^#Port 22$/d' /etc/ssh/sshd_config
+        sudo sed -i '/^Port 22$/d' /etc/ssh/sshd_config
+        sudo sed -i '/^#Port 22$/d' /etc/ssh/sshd_config
         
-        systemctl restart sshd || systemctl restart ssh
+        sudo systemctl restart sshd || sudo systemctl restart ssh
         echo -e "${C_GREEN}🎉 阻断完成！root 直连与 22 端口现已彻底失效，服务器防暴破安全级别已拉满！${C_RESET}"
     else
         echo -e "${C_GRAY}已放弃封禁操作。${C_RESET}"
