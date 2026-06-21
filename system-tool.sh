@@ -15,33 +15,48 @@ LINE_GRAY="${C_GRAY}---------------------------------------------------------${C
 run_tool_installation() {
     local auto_prompt=$1
     local tools_to_check=("sudo" "curl" "git" "tar" "wget" "unzip" "nano" "sshpass")
+    local installed_tools=""
     local missing_tools=""
     
+    echo -e "${C_CYAN}正在检查系统基础工具...${C_RESET}"
     for t in "${tools_to_check[@]}"; do
-        if ! command -v "$t" &> /dev/null; then
+        if command -v "$t" &> /dev/null; then
+            installed_tools="$installed_tools $t"
+        else
             missing_tools="$missing_tools $t"
         fi
     done
     
-    if [ -n "$missing_tools" ]; then
-        if [ "$auto_prompt" == "true" ]; then
-            echo -e "监测系统未安装以下初始化工具: ${C_YELLOW}${missing_tools}${C_RESET}"
-            read -p "全部自动安装 [y/n] (回车默认 y): " is_install
-        else
-            is_install="y"
+    echo -e "✅ 已安装工具:${C_GREEN}${installed_tools:- (无)}${C_RESET}"
+    
+    if [ -z "$missing_tools" ]; then
+        echo -e "${C_GREEN}🎉 系统所需基础工具 (包含 nano 等) 均已就绪。${C_RESET}"
+        if [ "$auto_prompt" != "true" ]; then
+            read -p "按回车键继续..." temp
         fi
-        
-        if [[ -z "$is_install" || "$is_install" =~ ^[Yy]$ ]]; then
-            echo -e "${C_CYAN}⏳ 正在自动拉取依赖环境...${C_RESET}"
-            apt-get update -y 2>/dev/null || sudo apt-get update -y
-            apt-get install -y $missing_tools 2>/dev/null || sudo apt-get install -y $missing_tools
-            yum install -y $missing_tools 2>/dev/null || sudo yum install -y $missing_tools
-            echo -e "${C_GREEN}✅ 基础工具全部安装完毕！${C_RESET}"
-        else
-            echo -e "${C_GRAY}已跳过工具安装。${C_RESET}"
-        fi
+        return
+    fi
+
+    echo -e "⚠️ 待安装工具:${C_YELLOW}${missing_tools}${C_RESET}"
+    
+    if [ "$auto_prompt" == "true" ]; then
+        is_install="y"
     else
-        echo -e "${C_GREEN}✅ 系统所需基础工具均已就绪。${C_RESET}"
+        read -p "是否立即自动安装以上缺失工具? [y/n] (回车默认 y): " is_install
+    fi
+    
+    if [[ -z "$is_install" || "$is_install" =~ ^[Yy]$ ]]; then
+        echo -e "${C_CYAN}⏳ 正在自动拉取依赖环境...${C_RESET}"
+        apt-get update -y 2>/dev/null || sudo apt-get update -y
+        apt-get install -y $missing_tools 2>/dev/null || sudo apt-get install -y $missing_tools
+        yum install -y $missing_tools 2>/dev/null || sudo yum install -y $missing_tools
+        echo -e "${C_GREEN}✅ 基础工具全部安装完毕！${C_RESET}"
+    else
+        echo -e "${C_GRAY}已跳过工具安装。${C_RESET}"
+    fi
+    
+    if [ "$auto_prompt" != "true" ]; then
+        read -p "按回车键继续..." temp
     fi
 }
 
@@ -118,22 +133,24 @@ run_swap_check() {
     fi
 }
 
-run_ssh_port_change() {
+run_ssh_port_add() {
     local auto_prompt=$1
-    if [ "$auto_prompt" == "true" ]; then
-        read -p "是否修改 SSH 端口? [y/n] (回车默认 y): " do_port
-        if [[ -n "$do_port" && ! "$do_port" =~ ^[Yy]$ ]]; then
-            return
-        fi
-    fi
-
-    local current_port=$(sshd -T 2>/dev/null | grep -i '^port ' | awk '{print $2}' || echo "22")
-    echo -e "当前 SSH 端口为: ${current_port}"
-    read -p "请输入新的 SSH 端口号: " new_port
+    local current_ports=$(sshd -T 2>/dev/null | grep -i '^port ' | awk '{print $2}' | paste -sd "," - || echo "22")
+    echo -e "当前已监听的 SSH 端口为: ${current_ports}"
+    echo -e "${C_YELLOW}💡 提示: 本操作为【追加】新端口，原端口(如22)将同时保留，防止修改失败导致失联。${C_RESET}"
+    read -p "请输入要添加的 SSH 新端口号: " new_port
 
     if [[ -n "$new_port" && "$new_port" =~ ^[0-9]+$ && "$new_port" -le 65535 ]]; then
-        echo -e "${C_CYAN}⏳ 正在修改端口并执行防火墙穿透...${C_RESET}"
-        sed -i -E "s/^#?Port .*/Port $new_port/" /etc/ssh/sshd_config
+        echo -e "${C_CYAN}⏳ 正在添加端口并执行防火墙穿透...${C_RESET}"
+        
+        # 确保原有的默认端口显式存在，以防只留了新端口
+        if ! grep -i "^Port 22" /etc/ssh/sshd_config > /dev/null; then
+            sed -i '1i Port 22' /etc/ssh/sshd_config
+        fi
+        
+        if ! grep -i "^Port $new_port" /etc/ssh/sshd_config > /dev/null; then
+            sed -i "/^Port 22/a Port $new_port" /etc/ssh/sshd_config
+        fi
         
         local fw_opened=false
         if command -v ufw &> /dev/null && ufw status | grep -q "Active"; then
@@ -154,77 +171,16 @@ run_ssh_port_change() {
         systemctl restart sshd || systemctl restart ssh
         
         if [ "$fw_opened" = true ]; then
-            echo -e "${C_GREEN}✅ SSH 端口已更新为 $new_port，系统防火墙已自动为您放行，可以放心重启！${C_RESET}"
+            echo -e "${C_GREEN}✅ SSH 新端口 $new_port 已添加！系统防火墙已自动为您双向放行。可以放心使用新端口尝试登录。${C_RESET}"
         else
-            echo -e "${C_GREEN}✅ SSH 端口已更新为 $new_port (未检测到运行中的防火墙限制，已自动放行，可放心重启)。${C_RESET}"
+            echo -e "${C_GREEN}✅ SSH 新端口 $new_port 已添加！(未检测到运行中的防火墙限制，已放行)。${C_RESET}"
         fi
     else
         echo -e "${C_YELLOW}端口输入无效或为空，放弃修改。${C_RESET}"
     fi
 }
 
-run_create_user() {
-    local auto_prompt=$1
-    
-    # 提取所有非系统内置的普通用户 (UID 1000~60000)
-    local reg_users=$(awk -F':' -v "min=1000" -v "max=60000" '{ if ( $3 >= min && $3 <= max && $1 != "nobody" ) print $1 }' /etc/passwd)
-    local user_count=$(echo "$reg_users" | grep -v "^$" | wc -l)
-    local current_port=$(sshd -T 2>/dev/null | grep -i '^port ' | awk '{print $2}' || echo "22")
-
-    echo -e "\n${C_CYAN}当前系统有效用户列表:${C_RESET}"
-    awk -F':' '{ if ($3 == 0 || ($3 >= 1000 && $3 <= 60000 && $1 != "nobody")) print " - " $1 " (UID: "$3")" }' /etc/passwd
-    echo -e "${LINE_GRAY}"
-
-    if [ "$user_count" -eq 0 ]; then
-        read -p "当前仅存在 root 及其它系统用户，是否创建一个具有免密 root 权限的个人新用户? [y/n] (回车默认 y): " do_create
-        if [[ -n "$do_create" && ! "$do_create" =~ ^[Yy]$ ]]; then
-            return
-        fi
-    else
-        echo -e "${C_YELLOW}检测到存在非 root 普通用户，进入账号遍历管理环节...${C_RESET}"
-        for u in $reg_users; do
-            if [ -z "$u" ]; then continue; fi
-            while true; do
-                echo -e "\n针对用户 ${C_GREEN}$u${C_RESET}，请选择操作:"
-                echo "1) 验证密码登录状态"
-                echo "2) 永久删除该账号及其文件"
-                echo "3) 不做处理"
-                read -p "请输入操作序号 [1/2/3] (回车默认 3): " u_opt
-                
-                if [[ -z "$u_opt" || "$u_opt" == "3" ]]; then
-                    echo -e "${C_GRAY}已跳过用户 $u。${C_RESET}"
-                    break
-                elif [ "$u_opt" == "1" ]; then
-                    read -p "请输入用户 $u 的密码 (明文): " u_pass
-                    if ! command -v sshpass &> /dev/null; then apt-get install -y sshpass 2>/dev/null || yum install -y sshpass 2>/dev/null; fi
-                    
-                    echo -e "${C_CYAN}⏳ 正在发起本地环回登录验证...${C_RESET}"
-                    if sshpass -p "$u_pass" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$current_port" "$u"@127.0.0.1 "echo 'OK'" 2>/dev/null | grep -q "OK"; then
-                        echo -e "${C_GREEN}✅ 密码完全正确，且具备独立 SSH 登录权限！${C_RESET}"
-                    else
-                        echo -e "${C_YELLOW}❌ 验证失败！可能是密码错误或账户被禁止 SSH 登录。${C_RESET}"
-                    fi
-                    break
-                elif [ "$u_opt" == "2" ]; then
-                    read -p "⚠️ 确认彻底删除用户 $u 及其主目录? [y/n]: " confirm_del
-                    if [[ "$confirm_del" =~ ^[Yy]$ ]]; then
-                        userdel -r "$u" 2>/dev/null
-                        rm -f /etc/sudoers.d/"$u"
-                        echo -e "${C_GREEN}✅ 用户 $u 已被彻底删除！${C_RESET}"
-                    fi
-                    break
-                fi
-            done
-        done
-        
-        echo -e "${LINE_GRAY}"
-        read -p "管理环节结束，是否需要再创建一个全新具有免密 root 权限的个人用户? [y/n] (回车默认 y): " do_create
-        if [[ -n "$do_create" && ! "$do_create" =~ ^[Yy]$ ]]; then
-            return
-        fi
-    fi
-
-    # 新建个人用户逻辑（注入免密提权 NOPASSWD）
+_create_user_logic() {
     while true; do
         read -p "请输入拟创建的新用户名: " new_user
         if [ -z "$new_user" ]; then continue; fi
@@ -240,7 +196,7 @@ run_create_user() {
             useradd -m -s /bin/bash "$new_user"
             echo "$new_user:$pass1" | chpasswd
             
-            # 核心升级：配置该用户在执行 sudo 时无须输入任何密码
+            # 配置免密提权 NOPASSWD
             echo "$new_user ALL=(ALL:ALL) NOPASSWD: ALL" > /etc/sudoers.d/"$new_user"
             chmod 0440 /etc/sudoers.d/"$new_user"
             echo -e "${C_GREEN}✅ 用户 $new_user 创建成功，已配置免密 sudo 权限！连接后输入 'sudo -i' 无需密码即可切换为 root。${C_RESET}"
@@ -251,45 +207,128 @@ run_create_user() {
     done
 }
 
-run_disable_root() {
-    local auto_prompt=$1
-    if [ "$auto_prompt" == "true" ]; then
-        read -p "是否禁止 root 远程登录? [y/n] (回车默认 y): " do_disable
-        if [[ -n "$do_disable" && ! "$do_disable" =~ ^[Yy]$ ]]; then
+run_user_manage() {
+    # 提取所有系统用户 (包含 root 和常规普通用户)
+    local users_arr=($(awk -F':' '{ if ($3 == 0 || ($3 >= 1000 && $3 <= 60000 && $1 != "nobody")) print $1 }' /etc/passwd))
+    
+    echo -e "\n${C_CYAN}当前系统用户列表:${C_RESET}"
+    for i in "${!users_arr[@]}"; do
+        echo -e "$((i+1))) ${users_arr[$i]}"
+    done
+    echo -e "${LINE_GRAY}"
+
+    if [ ${#users_arr[@]} -eq 1 ] && [ "${users_arr[0]}" == "root" ]; then
+        echo -e "${C_YELLOW}系统中仅存在 root 用户，安全起见，您必须创建一个具有免密 root 权限的个人新用户！${C_RESET}"
+        _create_user_logic
+    else
+        read -p "请选择要操作验证的用户序号: " u_idx
+        if [[ ! "$u_idx" =~ ^[0-9]+$ ]] || [ "$u_idx" -lt 1 ] || [ "$u_idx" -gt ${#users_arr[@]} ]; then
+            echo -e "${C_YELLOW}输入无效，已退出管理环节。${C_RESET}"
             return
         fi
+        
+        local selected_user="${users_arr[$((u_idx-1))]}"
+        local current_port=$(sshd -T 2>/dev/null | grep -i '^port ' | head -n 1 | awk '{print $2}' || echo "22")
+        
+        while true; do
+            read -p "请输入用户 $selected_user 的密码(明文): " u_pass
+            if ! command -v sshpass &> /dev/null; then apt-get install -y sshpass 2>/dev/null || yum install -y sshpass 2>/dev/null; fi
+            
+            echo -e "${C_CYAN}⏳ 正在发起本地环回登录验证...${C_RESET}"
+            if sshpass -p "$u_pass" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$current_port" "$selected_user"@127.0.0.1 "echo 'OK'" 2>/dev/null | grep -q "OK"; then
+                echo -e "${C_GREEN}✅ 验证成功！密码完全正确，具备独立 SSH 登录权限。${C_RESET}"
+                break
+            else
+                read -p "❌ 验证失败！是否重试输入密码? (输入 n 为放弃验证直接新建用户) [y/n] (回车默认 y): " retry_opt
+                if [[ "$retry_opt" =~ ^[Nn]$ ]]; then
+                    _create_user_logic
+                    break
+                fi
+            fi
+        done
+    fi
+}
+
+run_check_ssh_firewall() {
+    echo -e "\n${C_CYAN}🔍 当前 SSH 端口监听状态 (/etc/ssh/sshd_config):${C_RESET}"
+    grep -i '^Port ' /etc/ssh/sshd_config || echo -e "Port 22 (系统默认隐含配置)"
+
+    echo -e "\n${C_CYAN}🛡️ 当前系统防火墙状态:${C_RESET}"
+    if command -v ufw &> /dev/null; then
+        ufw status | grep -i "Status" || ufw status
+    elif command -v firewall-cmd &> /dev/null; then
+        echo -e "Firewalld 运行状态: $(firewall-cmd --state 2>/dev/null)"
+        echo -e "已放行的端口: $(firewall-cmd --list-ports 2>/dev/null)"
+    elif command -v iptables &> /dev/null; then
+        iptables -L INPUT -n | grep dpt || echo "iptables 放行规则如上 (空则表示无特殊拦截)"
+    else
+        echo -e "未检测到 ufw/firewalld，系统可能是纯净状态或由云平台安全组进行外部管控。"
+    fi
+    
+    echo -e "\n${C_YELLOW}💡 强烈建议：${C_RESET}"
+    echo -e "在执行选项 [20 一键禁用 root 和 22 端口] 之前，请务必【立即开启一个新的 SSH 终端】！"
+    echo -e "使用您创建的【非 root 账号】和【新端口】尝试登录。确认连接成功且可以通过 'sudo -i' 提权后，再执行 20 选项。"
+}
+
+run_lockdown() {
+    echo -e "\n${C_CYAN}⏳ 正在进行执行环境的安全合规监测...${C_RESET}"
+    
+    # 提取当前登录发起用户 (过滤 sudo 环境导致的虚假 root)
+    local LOGIN_USER=$(logname 2>/dev/null)
+    if [ -z "$LOGIN_USER" ]; then
+        LOGIN_USER=${SUDO_USER:-$(whoami)}
+    fi
+    
+    # 提取当前 SSH 接收端口
+    local CONN_PORT=$(echo $SSH_CONNECTION | awk '{print $4}')
+    
+    echo -e "1. 探测当前操作登录用户: ${C_GREEN}$LOGIN_USER${C_RESET}"
+    if [ -z "$CONN_PORT" ]; then
+        echo -e "2. 探测当前 SSH 登录接收端口: ${C_YELLOW}未知 (可能运行于 tmux/screen 中)${C_RESET}"
+    else
+        echo -e "2. 探测当前 SSH 登录接收端口: ${C_GREEN}$CONN_PORT${C_RESET}"
     fi
 
-    echo -e "${C_YELLOW}⚠️ 警告：为防止服务器彻底失联，必须强验证非 root 账户的 SSH 登录以及 sudo -i 免密提权能力！${C_RESET}"
-    local current_port=$(sshd -T 2>/dev/null | grep -i '^port ' | awk '{print $2}' || echo "22")
-    
-    read -p "请输入要用于接管系统的非 root 用户名: " v_user
-    if [ -z "$v_user" ] || [ "$v_user" == "root" ]; then
-        echo -e "${C_YELLOW}❌ 用户输入不合法或仍为 root，操作已紧急中止。${C_RESET}"
+    local pass_check=true
+
+    if [ "$LOGIN_USER" == "root" ]; then
+        echo -e "${C_YELLOW}❌ 监测不通过: 您当前连接会话仍然是 root 身份，为防止失联，禁止操作！${C_RESET}"
+        pass_check=false
+    fi
+
+    if [ "$CONN_PORT" == "22" ]; then
+        echo -e "${C_YELLOW}❌ 监测不通过: 您当前的 SSH 连接仍旧建立在 22 端口上，直接封禁会导致会话立即断开或日后失联！${C_RESET}"
+        pass_check=false
+    fi
+
+    if [ "$pass_check" == "false" ]; then
+        echo -e "${C_GRAY}=================================================${C_RESET}"
+        echo -e "💡 保护机制已熔断: 当前操作已自动中止。"
+        echo -e "请您新开一个终端，使用配置好的【新端口】+【新账号】登录进来后，重新运行本脚本再执行 20 项！"
         return
     fi
-
-    read -p "请输入该用户的密码 (明文): " v_pass
     
-    if ! command -v sshpass &> /dev/null; then apt-get install -y sshpass 2>/dev/null || yum install -y sshpass 2>/dev/null; fi
-
-    echo -e "${C_CYAN}⏳ 阶段 1：正在验证该用户 SSH 连通性...${C_RESET}"
-    # 模拟登录并测试执行 `sudo -i whoami` 来看是否成功免密提权切换到 root 账户
-    local test_cmd="sudo -i whoami"
-    local run_result=$(sshpass -p "$v_pass" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$current_port" "$v_user"@127.0.0.1 "$test_cmd" 2>/dev/null | tr -d '\r\n')
-
-    if [ "$run_result" == "root" ]; then
-        echo -e "${C_GREEN}✅ 强验证成功！该账号 SSH 连接正常，且能无缝通过 'sudo -i' 切换至 root 权限！${C_RESET}"
-        echo -e "${C_CYAN}⏳ 正在剥夺 root 的 SSH 直连权限...${C_RESET}"
-        sed -i -E 's/^#?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
+    echo -e "${C_GREEN}✅ 安全验证全面通过！当前已满足禁用 root 用户和 22 端口的安全条件。${C_RESET}"
+    read -p "⚠️ 警告：是否确认立即彻底封禁 root 远程登录并抹除 22 端口? [y/n]: " confirm_lock
+    
+    if [[ "$confirm_lock" =~ ^[Yy]$ ]]; then
+        echo -e "${C_CYAN}⏳ 正在吊销特权及擦除高危端口...${C_RESET}"
+        
+        # 禁用 root
+        if grep -q "PermitRootLogin" /etc/ssh/sshd_config; then
+            sed -i -E 's/^#?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
+        else
+            echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+        fi
+        
+        # 清理 22 端口
+        sed -i '/^Port 22$/d' /etc/ssh/sshd_config
+        sed -i '/^#Port 22$/d' /etc/ssh/sshd_config
+        
         systemctl restart sshd || systemctl restart ssh
-        echo -e "${C_GREEN}✅ root 远程登录已被彻底封死，安全保障已全面就绪！${C_RESET}"
+        echo -e "${C_GREEN}🎉 阻断完成！root 直连与 22 端口现已彻底失效，服务器防暴破安全级别已拉满！${C_RESET}"
     else
-        echo -e "${C_YELLOW}❌ 强验证失败！原因可能是：${C_RESET}"
-        echo -e " 1. 账号或密码输入有误。"
-        echo -e " 2. 防火墙拦截了该端口的本地回环请求。"
-        echo -e " 3. 该用户【没有免密提权配置】或 sudo 发生错误（测试返回值: '$run_result'，预期值: 'root'）。"
-        echo -e "${C_YELLOW}💡 为了防止您被反锁在服务器外面，封禁 root 操作已被系统强行熔断拦截并取消！请务必排查或到选项 8 重新赋予权限。${C_RESET}"
+        echo -e "${C_GRAY}已放弃封禁操作。${C_RESET}"
     fi
 }
 
@@ -302,15 +341,16 @@ while true; do
     echo -e "${C_BLUE}⚡ 系统配置极速工具${C_RESET}"
     echo -e "当前时间: $(date "+%Y-%m-%d %H:%M:%S")"
     echo -e "${LINE_GRAY}"
-    echo -e "1) 依次执行应用全部"
-    echo -e "2) 基础工具包极速部署 (含 nano、sudo、sshpass 等核心依赖)"
+    echo -e "1) 依次执行应用全部 (1-8项连贯执行)"
+    echo -e "2) 基础工具包极速部署"
     echo -e "3) 更改内核主机名"
     echo -e "4) 同步并锁死北京时间"
     echo -e "6) 监测内存不足 4G 自动装载 1G 虚拟内存"
-    echo -e "7) 更改并放行 SSH 端口"
-    echo -e "8) 创建 / 遍历管理个人非 root 用户 (赋予免密 sudo -i 权限)"
-    echo -e "9) 强验证非 root 连接状态及 sudo -i 提权能力并封禁 root 直连"
+    echo -e "7) 添加 SSH 端口并放行防火墙"
+    echo -e "8) 用户管理"
+    echo -e "9) 检验 SSH 端口与防火墙状态"
     echo -e "10) 一键应用系统初始化环境 (静默跑通 2、3、4、6 项)"
+    echo -e "20) 一键禁用 root 和 22端口登录"
     echo -e "0) 退出本脚本"
     echo -e "${LINE_GRAY}"
     read -p "请注入您要执行的系统子项编号: " SYS_OPT
@@ -328,15 +368,12 @@ while true; do
         echo -e "${LINE_GRAY}"
         run_swap_check "true"
         echo -e "${LINE_GRAY}"
-        run_ssh_port_change "true"
+        run_ssh_port_add "true"
         echo -e "${LINE_GRAY}"
-        run_create_user "true"
-        echo -e "${LINE_GRAY}"
-        run_disable_root "true"
-        read -p "全部流程结束，按回车返回主菜单..." temp
+        run_user_manage
+        read -p "阶段流程结束，请先执行选项 9 核对状态，按回车返回主菜单..." temp
     elif [ "$SYS_OPT" == "2" ]; then
         run_tool_installation "false"
-        read -p "回车返回..." temp
     elif [ "$SYS_OPT" == "3" ]; then
         run_hostname_change "false"
         read -p "回车返回..." temp
@@ -347,13 +384,13 @@ while true; do
         run_swap_check "false"
         read -p "回车返回..." temp
     elif [ "$SYS_OPT" == "7" ]; then
-        run_ssh_port_change "false"
+        run_ssh_port_add "false"
         read -p "回车返回..." temp
     elif [ "$SYS_OPT" == "8" ]; then
-        run_create_user "false"
+        run_user_manage
         read -p "回车返回..." temp
     elif [ "$SYS_OPT" == "9" ]; then
-        run_disable_root "false"
+        run_check_ssh_firewall
         read -p "回车返回..." temp
     elif [ "$SYS_OPT" == "10" ]; then
         echo -e "${LINE_GRAY}"
@@ -366,6 +403,9 @@ while true; do
         run_swap_check "true"
         echo -e "${LINE_GRAY}"
         echo -e "${C_GREEN}🚀 基础环境初始化 1-4 步(工具/主机名/时间/Swap)已全部执行完毕！${C_RESET}"
+        read -p "回车返回..." temp
+    elif [ "$SYS_OPT" == "20" ]; then
+        run_lockdown
         read -p "回车返回..." temp
     fi
 done
