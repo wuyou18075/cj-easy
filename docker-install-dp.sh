@@ -228,7 +228,37 @@ handle_compose_file_mode() {
 }
 
 SCRIPT_REMOTE_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/docker-install-dp.sh"
+# GitHub API 备用（绕过 raw CDN / 连通性问题）
+SCRIPT_REMOTE_API_URL="https://api.github.com/repos/wuyou18075/cj-easy/contents/docker-install-dp.sh?ref=main"
+SCRIPT_REMOTE_CDN_URL="https://cdn.jsdelivr.net/gh/wuyou18075/cj-easy@main/docker-install-dp.sh"
 LOCAL_DP_PATH="/usr/local/bin/dp"
+
+# 判定下载内容是否是有效的本脚本（避免把错误页或半截文件当成功）
+_is_valid_dp_script() {
+    local f="$1"
+    [ -s "$f" ] || return 1
+    # 至少要有 shebang + 本面板特征串
+    head -n 1 "$f" | grep -qE '^#!/(usr/)?bin/(env )?bash' || return 1
+    grep -q "Docker 综合管理面板" "$f" || return 1
+    grep -q "update_self_script" "$f" || return 1
+    # 体积过小多半是错误页
+    [ "$(wc -c < "$f")" -ge 2000 ] || return 1
+    return 0
+}
+
+# 从 GitHub Contents API 拉脚本（Accept: raw 直接拿文本）
+_fetch_dp_via_github_api() {
+    local out="$1"
+    if curl -fsSL -m 20 \
+        -H "Accept: application/vnd.github.raw" \
+        -H "Cache-Control: no-cache, no-store, must-revalidate" \
+        -H "Pragma: no-cache" \
+        "${SCRIPT_REMOTE_API_URL}&ts=$(date +%s%N 2>/dev/null || date +%s)" \
+        -o "$out"; then
+        _is_valid_dp_script "$out" && return 0
+    fi
+    return 1
+}
 
 # 在线热更新本脚本：覆盖全局 dp，并立刻用新版本重启当前会话
 update_self_script() {
@@ -238,20 +268,40 @@ update_self_script() {
     echo -e "\033[36m正在从 GitHub 拉取最新 docker-install-dp.sh ...\033[0m"
 
     local tmp_update="/tmp/docker-install-dp.update.$$"
-    if ! curl -fsSL -m 20 "${SCRIPT_REMOTE_URL}?v=$(date +%s)" -o "$tmp_update"; then
-        echo -e "\033[31m❌ 下载失败：无法连接 GitHub 或网络超时。\033[0m"
+    local bust
+    bust="$(date +%s%N 2>/dev/null || date +%s)_$$_${RANDOM}"
+    rm -f "$tmp_update"
+
+    # 1) raw 主通道
+    if curl -fsSL -m 20 \
+        --http1.1 \
+        -H "Cache-Control: no-cache, no-store, must-revalidate" \
+        -H "Pragma: no-cache" \
+        -H "Expires: 0" \
+        "${SCRIPT_REMOTE_URL}?v=${bust}" \
+        -o "$tmp_update" \
+        && _is_valid_dp_script "$tmp_update"; then
+        echo -e "\033[32m✅ 已从 raw 源下载成功\033[0m"
+    # 2) GitHub API 备用
+    elif _fetch_dp_via_github_api "$tmp_update"; then
+        echo -e "\033[32m✅ 已从 GitHub API 下载成功\033[0m"
+    # 3) jsDelivr 镜像
+    elif curl -fsSL -m 20 \
+        -H "Cache-Control: no-cache, no-store, must-revalidate" \
+        "${SCRIPT_REMOTE_CDN_URL}?v=${bust}" \
+        -o "$tmp_update" \
+        && _is_valid_dp_script "$tmp_update"; then
+        echo -e "\033[32m✅ 已从 jsDelivr 镜像下载成功\033[0m"
+    else
+        echo -e "\033[31m❌ 更新失败：raw / API / CDN 均不可用，或下载内容校验未通过。\033[0m"
+        echo -e "\033[90m💡 可在 WSL 手动执行：\033[0m"
+        echo -e "\033[36mcurl -fsSL \"${SCRIPT_REMOTE_URL}?v=\$(date +%s)\" -o ${LOCAL_DP_PATH} && chmod +x ${LOCAL_DP_PATH}\033[0m"
         rm -f "$tmp_update"
         return 1
     fi
 
-    if [ ! -s "$tmp_update" ] || grep -q "404: Not Found" "$tmp_update"; then
-        echo -e "\033[31m❌ 更新失败：远端文件为空或不存在。\033[0m"
-        rm -f "$tmp_update"
-        return 1
-    fi
-
-    # 只要是 bash 脚本就覆盖；兼容 root / 有 sudo 的环境
-    if [ -w "$(dirname "$LOCAL_DP_PATH")" ] 2>/dev/null; then
+    # 覆盖全局 dp；兼容 root / 有 sudo 的环境
+    if [ -w "$(dirname "$LOCAL_DP_PATH")" ] 2>/dev/null || [ "$(id -u)" -eq 0 ]; then
         cp "$tmp_update" "$LOCAL_DP_PATH"
         chmod +x "$LOCAL_DP_PATH"
     else
@@ -261,7 +311,8 @@ update_self_script() {
     rm -f "$tmp_update"
 
     # 清掉百宝箱远端工具表缓存，避免旧菜单残留
-    rm -f /tmp/remote_docker_tools.yml
+    rm -f /tmp/remote_docker_tools.yml /tmp/remote_docker_tools.yml.tmp \
+          /tmp/remote_docker_tools.yml.api /tmp/remote_docker_tools.yml.cdn 2>/dev/null || true
 
     echo -e "\033[32m🎉 更新成功！已覆盖 ${LOCAL_DP_PATH}，正在重新拉起新版本...\033[0m"
     sleep 1
