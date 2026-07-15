@@ -165,48 +165,54 @@ backup_compose_yaml() {
 # 核心功能模块: 动态应用安装与生命周期管理
 # ==========================================
 
-# 获取公网 IP（优先 IPv4；多源回退）；失败则回退内网 IP / 127.0.0.1
+# 获取公网 IP（强制优先 IPv4；没有 v4 才回退 v6）
 _get_public_ip() {
     local ip=""
     local u
-    # 1) 优先强制 IPv4，避免 URL 拼端口时 IPv6 无方括号
+    # 1) 强制 IPv4（-4），多源轮询
     for u in \
         "https://api.ipify.org" \
+        "https://4.ipw.cn" \
         "https://ipv4.icanhazip.com" \
+        "https://v4.ident.me" \
         "https://ifconfig.me/ip" \
-        "https://ip.sb" \
-        "https://checkip.amazonaws.com"
-    do
-        ip=$(curl -4 -fsS -m 3 "$u" 2>/dev/null | tr -d '[:space:]\r')
-        if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
-            echo "$ip"
-            return 0
-        fi
-    done
-    # 2) 再试普通请求（可能返回 IPv6）
-    for u in \
-        "https://api64.ipify.org" \
-        "https://icanhazip.com" \
-        "https://ifconfig.me/ip" \
+        "https://checkip.amazonaws.com" \
         "https://ip.sb"
     do
-        ip=$(curl -fsS -m 3 "$u" 2>/dev/null | tr -d '[:space:]\r')
+        ip=$(curl -4 -fsS -m 4 "$u" 2>/dev/null | tr -d '[:space:]\r')
         if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
             echo "$ip"
             return 0
         fi
-        # IPv6：至少含一个冒号且不是纯端口数字
-        if [[ "$ip" == *:* && "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+    done
+    # 2) 不带 -4 再试，但只接受 IPv4
+    for u in \
+        "https://api.ipify.org" \
+        "https://4.ipw.cn" \
+        "https://ifconfig.me/ip" \
+        "https://ip.sb" \
+        "https://icanhazip.com"
+    do
+        ip=$(curl -fsS -m 4 "$u" 2>/dev/null | tr -d '[:space:]\r')
+        if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
             echo "$ip"
             return 0
         fi
     done
-    # 3) 回退：本机首个 IPv4
+    # 3) 本机 IPv4
     ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
     if [ -n "$ip" ]; then
         echo "$ip"
         return 0
     fi
+    # 4) 最后才接受 IPv6（URL 侧会加 []）
+    for u in "https://api64.ipify.org" "https://ifconfig.me/ip" "https://icanhazip.com"; do
+        ip=$(curl -fsS -m 3 "$u" 2>/dev/null | tr -d '[:space:]\r')
+        if [[ "$ip" == *:* && "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
     echo "127.0.0.1"
 }
 
@@ -238,6 +244,124 @@ _get_host_port() {
 # 从模板块中提取全部服务键（支持多服务栈）
 _extract_service_keys() {
     echo "$1" | grep -E "^  [a-zA-Z0-9_-]+:" | awk -F':' '{print $1}' | tr -d ' \r'
+}
+
+# 保存并打印 CPA+CPAMP 初始化信息（含 CPA 独立访问）
+_print_and_save_cpa_stack_info() {
+    local admin_key="${1:-}"
+    local cpa_mgmt_key="${2:-}"
+    local cpa_api_key="${3:-}"
+    local cpamp_port_default="${4:-18317}"
+    local cpa_port_default="${5:-8317}"
+
+    local PUB_IP PUB_HOST CPAMP_PORT CPA_PORT INFO_FILE
+    echo -e "${C_GRAY}🌐 正在获取公网 IP（优先 IPv4）...${C_RESET}"
+    PUB_IP=$(_get_public_ip)
+    PUB_HOST=$(_format_host_for_url "$PUB_IP")
+    CPAMP_PORT=$(_get_host_port "cpa-manager-plus" "18317" "$cpamp_port_default")
+    CPA_PORT=$(_get_host_port "cli-proxy-api" "8317" "$cpa_port_default")
+
+    mkdir -p "${DOCKER_ROOT}/cpa-manager-plus" "${DOCKER_ROOT}/cli-proxy-api"
+    INFO_FILE="${DOCKER_ROOT}/cpa-manager-plus/INIT_INFO.txt"
+
+    {
+        echo "========================================================="
+        echo " CPA + CPAMP 初始化信息"
+        echo " 生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "========================================================="
+        echo ""
+        echo "【CPAMP 管理面板】（登录 management.html）"
+        echo "  面板地址(公网): http://${PUB_HOST}:${CPAMP_PORT}/management.html"
+        echo "  面板地址(本机): http://127.0.0.1:${CPAMP_PORT}/management.html"
+        echo "  健康检查:       curl http://127.0.0.1:${CPAMP_PORT}/health"
+        echo "  登录方式:       管理员密钥（不是用户名密码）"
+        echo "  管理员密钥:     ${admin_key:-（未记录，请查 docker logs cpa-manager-plus）}"
+        echo ""
+        echo "【CPA / CLIProxyAPI 独立访问】"
+        echo "  管理面板(公网): http://${PUB_HOST}:${CPA_PORT}/"
+        echo "  管理面板(本机): http://127.0.0.1:${CPA_PORT}/"
+        echo "  API 地址(公网):  http://${PUB_HOST}:${CPA_PORT}/v1"
+        echo "  API 地址(本机):  http://127.0.0.1:${CPA_PORT}/v1"
+        echo "  登录/鉴权方式:  Management Key（配置 remote-management.secret-key）"
+        echo "  Management Key: ${cpa_mgmt_key:-（未记录）}"
+        echo "  说明: CPA 面板没有传统用户名/密码，使用 Management Key 作为管理密钥"
+        echo ""
+        echo "【CPA 客户端 API（Claude Code / OpenAI 兼容）】"
+        echo "  Base URL:       http://${PUB_HOST}:${CPA_PORT}/v1"
+        echo "  API Key:        ${cpa_api_key:-（未记录）}"
+        echo ""
+        echo "【CPAMP Setup 连接 CPA 时填写】"
+        echo "  CPA URL(同网):  http://cli-proxy-api:8317"
+        echo "  CPA URL(宿主机): http://127.0.0.1:${CPA_PORT}"
+        echo "  CPA Management Key: ${cpa_mgmt_key:-（未记录）}"
+        echo ""
+        echo "【本地文件】"
+        echo "  本信息文件:     ${INFO_FILE}"
+        echo "  CPA 配置:       ${DOCKER_ROOT}/cli-proxy-api/config.yaml"
+        echo "  CPAMP 数据:     ${DOCKER_ROOT}/cpa-manager-plus/data"
+        echo "========================================================="
+    } | tee "$INFO_FILE"
+
+    {
+        echo "CPAMP Admin Key: ${admin_key}"
+        echo "CPA Management Key: ${cpa_mgmt_key}"
+        echo "CPA Client API Key: ${cpa_api_key}"
+        echo "CPAMP Panel: http://${PUB_HOST}:${CPAMP_PORT}/management.html"
+        echo "CPA Panel: http://${PUB_HOST}:${CPA_PORT}/"
+        echo "CPA API: http://${PUB_HOST}:${CPA_PORT}/v1"
+        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    } > "${DOCKER_ROOT}/cpa-manager-plus/INSTALL_SECRETS.txt"
+    chmod 600 "$INFO_FILE" "${DOCKER_ROOT}/cpa-manager-plus/INSTALL_SECRETS.txt" 2>/dev/null || true
+
+    echo -e "${C_GRAY}  以上信息已保存，之后可在控制台选【8 查看初始化信息】再次查看。${C_RESET}"
+}
+
+# 查看已保存的初始化信息
+_show_install_info() {
+    local name="$1"
+    local raw_block="$2"
+    local -a keys=()
+    mapfile -t keys < <(_extract_service_keys "$raw_block")
+    local info=""
+
+    for cand in \
+        "${DOCKER_ROOT}/cpa-manager-plus/INIT_INFO.txt" \
+        "${DOCKER_ROOT}/cli-proxy-api/INIT_INFO.txt" \
+        "${DOCKER_ROOT}/${keys[0]}/INIT_INFO.txt"
+    do
+        if [ -f "$cand" ]; then
+            info="$cand"
+            break
+        fi
+    done
+    if [ -z "$info" ]; then
+        for k in "${keys[@]}"; do
+            if [ -f "${DOCKER_ROOT}/${k}/INIT_INFO.txt" ]; then
+                info="${DOCKER_ROOT}/${k}/INIT_INFO.txt"
+                break
+            fi
+        done
+    fi
+
+    clear
+    echo -e "${C_BLUE}📄 初始化信息: ${C_YELLOW}${name}${C_RESET}"
+    echo -e "${LINE_GRAY}"
+    if [ -n "$info" ] && [ -f "$info" ]; then
+        echo -e "${C_GRAY}文件: ${info}${C_RESET}"
+        echo -e "${LINE_GRAY}"
+        cat "$info"
+    else
+        echo -e "${C_YELLOW}⚠️ 未找到初始化信息文件。${C_RESET}"
+        echo "可能原因：安装时未生成，或目录已被抹除。"
+        echo "预期路径: ${DOCKER_ROOT}/cpa-manager-plus/INIT_INFO.txt"
+        if [ -f "${DOCKER_ROOT}/cpa-manager-plus/INSTALL_SECRETS.txt" ]; then
+            echo -e "${LINE_GRAY}"
+            echo -e "${C_CYAN}找到密钥备忘 INSTALL_SECRETS.txt：${C_RESET}"
+            cat "${DOCKER_ROOT}/cpa-manager-plus/INSTALL_SECRETS.txt"
+        fi
+    fi
+    echo -e "${LINE_GRAY}"
+    read -p "回车返回..." temp
 }
 
 # 为 CPA / CLIProxyAPI 写入官方要求的 config.yaml
@@ -443,29 +567,13 @@ _install_service() {
 
     # 个别应用安装后的访问提示
     if echo "${SVC_KEYS[*]}" | grep -qw "cpa-manager-plus"; then
-        local PUB_IP HOST_PORT PUB_HOST
-        echo -e "${C_GRAY}🌐 正在获取公网 IP...${C_RESET}"
-        PUB_IP=$(_get_public_ip)
-        PUB_HOST=$(_format_host_for_url "$PUB_IP")
-        HOST_PORT=$(_get_host_port "cpa-manager-plus" "18317" "${VAL_CPAMP_PORT:-18317}")
         echo -e "${LINE_GRAY}"
-        echo -e "${C_CYAN}📌 CPA + CPAMP 使用提示（按官方文档）：${C_RESET}"
-        echo -e "  面板地址(公网): ${C_YELLOW}http://${PUB_HOST}:${HOST_PORT}/management.html${C_RESET}"
-        echo -e "  面板地址(本机): ${C_YELLOW}http://127.0.0.1:${HOST_PORT}/management.html${C_RESET}"
-        echo -e "  健康检查: ${C_YELLOW}curl http://127.0.0.1:${HOST_PORT}/health${C_RESET}"
-        if [ -n "$VAL_ADMIN_KEY" ]; then
-            echo -e "  CPAMP 管理员密钥: ${C_YELLOW}${VAL_ADMIN_KEY}${C_RESET}"
-        else
-            echo -e "  管理员密钥: 查看日志 ${C_YELLOW}docker logs cpa-manager-plus${C_RESET}"
-        fi
-        if [ -n "$VAL_CPA_MGMT_KEY" ]; then
-            echo -e "  CPA Management Key: ${C_YELLOW}${VAL_CPA_MGMT_KEY}${C_RESET}"
-        fi
-        echo -e "  同网 CPA URL(setup 用): ${C_YELLOW}http://cli-proxy-api:8317${C_RESET}"
-        echo -e "  CPA 网关端口: ${C_YELLOW}${VAL_CPA_PORT:-8317}${C_RESET}"
-        echo -e "  密钥备忘: ${C_YELLOW}${DOCKER_ROOT}/cpa-manager-plus/INSTALL_SECRETS.txt${C_RESET}"
-        echo -e "  CPA 配置: ${C_YELLOW}${DOCKER_ROOT}/cli-proxy-api/config.yaml${C_RESET}"
-        echo -e "${C_GRAY}  说明: 已通过环境变量写入 CPA_UPSTREAM_URL / CPA_MANAGEMENT_KEY / ADMIN_KEY，一般可跳过首次 setup 手填连接。${C_RESET}"
+        _print_and_save_cpa_stack_info \
+            "${VAL_ADMIN_KEY}" \
+            "${VAL_CPA_MGMT_KEY}" \
+            "${VAL_CPA_API_KEY}" \
+            "${VAL_CPAMP_PORT:-18317}" \
+            "${VAL_CPA_PORT:-8317}"
     fi
 
     read -p "按回车键返回上级菜单..." temp
@@ -510,9 +618,10 @@ manage_service() {
         echo " 5) 停止 (Stop)"
         echo " 6) 卸载 (仅强制清除容器)"
         echo " 7) 抹除 (深度清除容器及本地挂载目录)"
+        echo " 8) 查看初始化信息 (登录地址/密钥)"
         echo " 0) 返回上层大厅"
         echo -e "${LINE_GRAY}"
-        read -p "请分配操作指令 [0-7]: " SUB_OPT
+        read -p "请分配操作指令 [0-8]: " SUB_OPT
 
         case $SUB_OPT in
             1)
@@ -569,6 +678,9 @@ manage_service() {
                     echo -e "${C_GRAY}数据销毁动作已终止。${C_RESET}"
                 fi
                 read -p "回车继续..." temp
+                ;;
+            8)
+                _show_install_info "$SELECTED_NAME" "$RAW_BLOCK"
                 ;;
             0) break ;;
             *) echo -e "${C_GRAY}❌ 无效代码。${C_RESET}"; sleep 1 ;;
