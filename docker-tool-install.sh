@@ -276,6 +276,17 @@ _install_service() {
     cd "$DOCKER_ROOT" || return
     docker compose up -d "$S_KEY"
     echo -e "${C_GREEN}🎉 部署动作全部完成！${C_RESET}"
+
+    # 个别应用安装后的访问提示
+    if [ "$S_KEY" = "cpa-manager-plus" ]; then
+        echo -e "${LINE_GRAY}"
+        echo -e "${C_CYAN}📌 CPA Manager Plus 使用提示：${C_RESET}"
+        echo -e "  面板地址: ${C_YELLOW}http://<主机IP>:18317/management.html${C_RESET}"
+        echo -e "  健康检查: ${C_YELLOW}curl http://127.0.0.1:18317/health${C_RESET}"
+        echo -e "  管理员密钥: 首次启动会在日志打印一次 → ${C_YELLOW}docker logs cpa-manager-plus${C_RESET}"
+        echo -e "  Setup 时 CPA 在宿主机可填: ${C_YELLOW}http://host.docker.internal:8317${C_RESET}"
+    fi
+
     read -p "按回车键返回上级菜单..." temp
 }
 

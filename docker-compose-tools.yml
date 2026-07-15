@@ -76,3 +76,31 @@ services:
       timeout: 5s
       retries: 5
 #END
+#START
+#NAME:CPA Manager Plus
+#PARAM_PORT:端口=18317
+  cpa-manager-plus:
+    image: seakee/cpa-manager-plus:latest
+    container_name: cpa-manager-plus
+    restart: always
+    ports:
+      - "{PARAM_PORT}:18317"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - HTTP_ADDR=0.0.0.0:18317
+      - USAGE_DB_PATH=/data/usage.sqlite
+      - CPA_MANAGER_DATA_KEY_PATH=/data/data.key
+      - USAGE_COLLECTOR_MODE=auto
+      - USAGE_BATCH_SIZE=100
+      - USAGE_POLL_INTERVAL_MS=500
+      - USAGE_QUERY_LIMIT=50000
+      - USAGE_CORS_ORIGINS=*
+    volumes:
+      - ./cpa-manager-plus/data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18317/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+#END
