@@ -165,6 +165,47 @@ backup_compose_yaml() {
 # 核心功能模块: 动态应用安装与生命周期管理
 # ==========================================
 
+# 获取公网 IP（多源回退）；失败则回退内网 IP / 127.0.0.1
+_get_public_ip() {
+    local ip=""
+    local u
+    for u in \
+        "https://ip.sb" \
+        "https://ifconfig.me/ip" \
+        "https://api.ipify.org" \
+        "https://icanhazip.com" \
+        "https://checkip.amazonaws.com"
+    do
+        ip=$(curl -fsS -m 3 "$u" 2>/dev/null | tr -d '[:space:]\r')
+        # 粗校验 IPv4 / 简单 IPv6
+        if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || [[ "$ip" =~ ^[0-9a-fA-F:]+$ && "$ip" == *:* ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+    # 回退：本机首个非 loopback 地址
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    if [ -n "$ip" ]; then
+        echo "$ip"
+        return 0
+    fi
+    echo "127.0.0.1"
+}
+
+# 读取容器对外映射的主机端口；失败则用默认值
+_get_host_port() {
+    local cname="$1"
+    local container_port="$2"
+    local default_port="$3"
+    local mapped
+    mapped=$(docker port "$cname" "$container_port" 2>/dev/null | head -n 1 | awk -F: '{print $NF}' | tr -d ' \r')
+    if [[ "$mapped" =~ ^[0-9]+$ ]]; then
+        echo "$mapped"
+    else
+        echo "$default_port"
+    fi
+}
+
 _install_service() {
     local NAME="$1"
     local R_BLOCK="$2"
@@ -242,7 +283,7 @@ _install_service() {
             echo "0) 取消安装"
             echo -e "${LINE_GRAY}"
             read -p "请选择冲突裁决方案 [0-2]: " c_opt
-            
+
             if [ "$c_opt" == "1" ]; then
                 backup_compose_yaml
                 clear
@@ -279,10 +320,15 @@ _install_service() {
 
     # 个别应用安装后的访问提示
     if [ "$S_KEY" = "cpa-manager-plus" ]; then
+        local PUB_IP HOST_PORT
+        echo -e "${C_GRAY}🌐 正在获取公网 IP...${C_RESET}"
+        PUB_IP=$(_get_public_ip)
+        HOST_PORT=$(_get_host_port "cpa-manager-plus" "18317" "18317")
         echo -e "${LINE_GRAY}"
         echo -e "${C_CYAN}📌 CPA Manager Plus 使用提示：${C_RESET}"
-        echo -e "  面板地址: ${C_YELLOW}http://<主机IP>:18317/management.html${C_RESET}"
-        echo -e "  健康检查: ${C_YELLOW}curl http://127.0.0.1:18317/health${C_RESET}"
+        echo -e "  面板地址(公网): ${C_YELLOW}http://${PUB_IP}:${HOST_PORT}/management.html${C_RESET}"
+        echo -e "  面板地址(本机): ${C_YELLOW}http://127.0.0.1:${HOST_PORT}/management.html${C_RESET}"
+        echo -e "  健康检查: ${C_YELLOW}curl http://127.0.0.1:${HOST_PORT}/health${C_RESET}"
         echo -e "  管理员密钥: 首次启动会在日志打印一次 → ${C_YELLOW}docker logs cpa-manager-plus${C_RESET}"
         echo -e "  Setup 时 CPA 在宿主机可填: ${C_YELLOW}http://host.docker.internal:8317${C_RESET}"
     fi
