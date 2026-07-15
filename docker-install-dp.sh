@@ -320,6 +320,84 @@ update_self_script() {
     exec bash "$LOCAL_DP_PATH"
 }
 
+# 百宝箱默认写入的本地 compose 固定路径（与 docker-tool-install.sh 一致）
+TOOLBOX_DOCKER_ROOT="/app/docker"
+TOOLBOX_COMPOSE_FILE="${TOOLBOX_DOCKER_ROOT}/docker-compose.yml"
+TOOLBOX_YAML_BAK_DIR="${TOOLBOX_DOCKER_ROOT}/yaml-bak"
+
+# 查看 / 管理百宝箱默认 docker-compose 文件
+view_toolbox_compose() {
+    clear
+    echo -e "📄 \033[1;34m百宝箱默认 Docker Compose 配置\033[0m"
+    echo "--------------------------------------------------------------------------------"
+    echo -e "固定路径: \033[33m${TOOLBOX_COMPOSE_FILE}\033[0m"
+    echo -e "数据目录: \033[33m${TOOLBOX_DOCKER_ROOT}\033[0m"
+    echo -e "配置备份: \033[33m${TOOLBOX_YAML_BAK_DIR}\033[0m"
+    echo "--------------------------------------------------------------------------------"
+
+    if [ ! -f "$TOOLBOX_COMPOSE_FILE" ]; then
+        echo -e "\033[33m⚠️  尚未生成该文件。\033[0m"
+        echo "请先进入「5 Docker 安全百宝箱」安装任意应用后，才会自动写入。"
+        return 0
+    fi
+
+    local fsize mtime
+    fsize=$(wc -c < "$TOOLBOX_COMPOSE_FILE" 2>/dev/null | tr -d ' ')
+    mtime=$(stat -c '%y' "$TOOLBOX_COMPOSE_FILE" 2>/dev/null || stat -f '%Sm' "$TOOLBOX_COMPOSE_FILE" 2>/dev/null || echo "未知")
+    echo -e "文件大小: ${fsize} 字节"
+    echo -e "修改时间: ${mtime}"
+    echo "--------------------------------------------------------------------------------"
+    echo -e "\033[36m--- 文件内容 ---\033[0m"
+    # 原样展示，方便核对端口/密码/挂载
+    cat -n "$TOOLBOX_COMPOSE_FILE"
+    echo "--------------------------------------------------------------------------------"
+
+    if command -v docker >/dev/null 2>&1; then
+        echo -e "\033[36m--- 该 compose 关联容器状态 ---\033[0m"
+        (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" ps -a 2>/dev/null) \
+            || echo -e "\033[33m(无法解析 compose 状态)\033[0m"
+        echo "--------------------------------------------------------------------------------"
+    fi
+
+    if [ -d "$TOOLBOX_YAML_BAK_DIR" ]; then
+        local bak_count
+        bak_count=$(ls -1 "$TOOLBOX_YAML_BAK_DIR"/docker-compose-bak-*.yml 2>/dev/null | wc -l | tr -d ' ')
+        echo -e "历史快照: 共 ${bak_count} 份（最多保留约 10 份）"
+        if [ "${bak_count:-0}" -gt 0 ]; then
+            ls -lt "$TOOLBOX_YAML_BAK_DIR"/docker-compose-bak-*.yml 2>/dev/null | head -n 5 | while read -r line; do
+                echo "  $line"
+            done
+        fi
+        echo "--------------------------------------------------------------------------------"
+    fi
+
+    echo " 1) 用 nano 编辑该文件"
+    echo " 2) 在该目录执行 docker compose ps"
+    echo " 3) 在该目录执行 docker compose up -d"
+    echo " 0) 返回主菜单"
+    echo "--------------------------------------------------------------------------------"
+    read -r -p "请选择 [0-3]: " sub
+    case "$sub" in
+        1)
+            if command -v nano >/dev/null 2>&1; then
+                nano "$TOOLBOX_COMPOSE_FILE"
+            elif command -v vi >/dev/null 2>&1; then
+                vi "$TOOLBOX_COMPOSE_FILE"
+            else
+                echo -e "\033[31m未找到 nano/vi 编辑器。\033[0m"
+            fi
+            ;;
+        2)
+            (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" ps -a)
+            ;;
+        3)
+            (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" up -d)
+            ;;
+        0|*)
+            ;;
+    esac
+}
+
 if [ "$1" == "-f" ]; then
     handle_compose_file_mode
     exit 0
@@ -338,6 +416,7 @@ while true; do
     echo " 5 Docker 安全百宝箱"
     echo " 6 注册为全局 dp 快捷键"
     echo " 7 在线更新本脚本 (同步 GitHub 最新版)"
+    echo " 8 查看百宝箱默认 Compose 文件 (/app/docker)"
     echo " 9 列出50条内置命令"
     echo " 0 安全退出控制台"
     echo "--------------------------------------------------------------------------------"
@@ -345,7 +424,7 @@ while true; do
     show_education_commands
 
     echo "--------------------------------------------------------------------------------"
-    read -r -p "请选择操作 [0-7, 9]: " m
+    read -r -p "请选择操作 [0-9]: " m
     case $m in
         1) manage_install_uninstall ;;
         2)
@@ -370,12 +449,18 @@ while true; do
             ;;
         6)
             echo "正在通过您的远程链接下载并注册全局快捷键 'dp'..."
-            curl -fsSL "${SCRIPT_REMOTE_URL}?v=$(date +%s)" -o "$LOCAL_DP_PATH"
-            chmod +x "$LOCAL_DP_PATH"
-            echo -e "\n\033[32m🎉 注册并同步成功！以后可在任何路径直接输入 'dp' 或 'dp -f' 运行。\033[0m"
+            if curl -fsSL "${SCRIPT_REMOTE_URL}?v=$(date +%s)" -o "$LOCAL_DP_PATH" && [ -s "$LOCAL_DP_PATH" ]; then
+                chmod +x "$LOCAL_DP_PATH"
+                echo -e "\n\033[32m🎉 注册并同步成功！以后可在任何路径直接输入 'dp' 或 'dp -f' 运行。\033[0m"
+            else
+                echo -e "\n\033[31m❌ 注册失败：无法从 GitHub 下载脚本。\033[0m"
+            fi
             ;;
         7)
             update_self_script
+            ;;
+        8)
+            view_toolbox_compose
             ;;
         9)
             list_all_50_commands
