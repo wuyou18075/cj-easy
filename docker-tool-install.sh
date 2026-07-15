@@ -23,6 +23,7 @@ YAML_FILE="${DOCKER_ROOT}/docker-compose.yml"
 YAML_BAK_DIR="${DOCKER_ROOT}/yaml-bak"
 REMOTE_TOOLS_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/docker-compose-tools.yml"
 TEMP_TOOLS="/tmp/remote_docker_tools.yml"
+# 每次拉取都带时间戳，尽量绕过 raw.githubusercontent CDN 缓存
 
 # 初始化环境依赖
 mkdir -p "$DOCKER_ROOT"
@@ -34,7 +35,9 @@ mkdir -p "$YAML_BAK_DIR"
 
 fetch_remote_tools() {
     echo -e "${C_CYAN}🔄 正在与云端应用库同步数据...${C_RESET}"
-    curl -sSL -m 10 "$REMOTE_TOOLS_URL" -o "$TEMP_TOOLS"
+    # 带时间戳参数，降低 raw CDN 返回旧内容的概率
+    curl -sSL -m 10 -H "Cache-Control: no-cache" -H "Pragma: no-cache" \
+        "${REMOTE_TOOLS_URL}?v=$(date +%s)" -o "$TEMP_TOOLS"
     if [ ! -s "$TEMP_TOOLS" ]; then
         echo -e "${C_RED}❌ 云端仓库拉取失败，请检查网络或 URL 是否正确。${C_RESET}"
         sleep 2
@@ -325,17 +328,17 @@ load_migration_data() {
 # 交互主入口: 动态商店大厅
 # ==========================================
 
-# 预检：进入主菜单前强行拉取一次远端工具表
-fetch_remote_tools
-
 while true; do
+    # 每次回到大厅都重新拉远端工具表，避免菜单开着期间远端更新后仍显示旧列表
+    fetch_remote_tools
+
     clear
     echo -e "${C_BLUE}⚡ Docker 安全百宝箱 / 动态应用矩阵${C_RESET}"
     echo -e "${LINE_GRAY}"
-    
+
     # 动态构建云端提取的模块菜单
     mapfile -t TOOL_NAMES < <(grep -oP "^#NAME:\K.*" "$TEMP_TOOLS" | tr -d '\r')
-    
+
     if [ ${#TOOL_NAMES[@]} -eq 0 ]; then
         echo -e "${C_YELLOW}⚠️ 暂未捕获到任何云端可用组件，请排查模板格式或网络源。${C_RESET}"
     else
@@ -343,8 +346,9 @@ while true; do
             echo -e "$((i+1))) ${TOOL_NAMES[$i]}"
         done
     fi
-    
-    echo -e "\n99) 跨节点迁移：打包导出容器与挂载数据"
+
+    echo -e "\n98) 强制刷新云端应用列表"
+    echo -e "99) 跨节点迁移：打包导出容器与挂载数据"
     echo -e "100) 跨节点迁移：物理读取装载迁移文件"
     echo -e "0) 返回主环境"
     echo -e "${LINE_GRAY}"
@@ -353,6 +357,11 @@ while true; do
     if [ "$MAIN_OPT" == "0" ]; then
         echo -e "👋 安全退出百宝箱。"
         exit 0
+    elif [ "$MAIN_OPT" == "98" ]; then
+        rm -f "$TEMP_TOOLS"
+        echo -e "${C_CYAN}🔄 已清理本地缓存，即将重新同步云端应用库...${C_RESET}"
+        sleep 1
+        continue
     elif [ "$MAIN_OPT" == "99" ]; then
         pack_migration_data
     elif [ "$MAIN_OPT" == "100" ]; then

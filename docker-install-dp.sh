@@ -227,6 +227,48 @@ handle_compose_file_mode() {
     esac
 }
 
+SCRIPT_REMOTE_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/docker-install-dp.sh"
+LOCAL_DP_PATH="/usr/local/bin/dp"
+
+# 在线热更新本脚本：覆盖全局 dp，并立刻用新版本重启当前会话
+update_self_script() {
+    clear
+    echo -e "\033[1;34m🔄 在线更新 Docker 管理脚本\033[0m"
+    echo "--------------------------------------------------------------------------------"
+    echo -e "\033[36m正在从 GitHub 拉取最新 docker-install-dp.sh ...\033[0m"
+
+    local tmp_update="/tmp/docker-install-dp.update.$$"
+    if ! curl -fsSL -m 20 "${SCRIPT_REMOTE_URL}?v=$(date +%s)" -o "$tmp_update"; then
+        echo -e "\033[31m❌ 下载失败：无法连接 GitHub 或网络超时。\033[0m"
+        rm -f "$tmp_update"
+        return 1
+    fi
+
+    if [ ! -s "$tmp_update" ] || grep -q "404: Not Found" "$tmp_update"; then
+        echo -e "\033[31m❌ 更新失败：远端文件为空或不存在。\033[0m"
+        rm -f "$tmp_update"
+        return 1
+    fi
+
+    # 只要是 bash 脚本就覆盖；兼容 root / 有 sudo 的环境
+    if [ -w "$(dirname "$LOCAL_DP_PATH")" ] 2>/dev/null; then
+        cp "$tmp_update" "$LOCAL_DP_PATH"
+        chmod +x "$LOCAL_DP_PATH"
+    else
+        sudo cp "$tmp_update" "$LOCAL_DP_PATH"
+        sudo chmod +x "$LOCAL_DP_PATH"
+    fi
+    rm -f "$tmp_update"
+
+    # 清掉百宝箱远端工具表缓存，避免旧菜单残留
+    rm -f /tmp/remote_docker_tools.yml
+
+    echo -e "\033[32m🎉 更新成功！已覆盖 ${LOCAL_DP_PATH}，正在重新拉起新版本...\033[0m"
+    sleep 1
+    hash -r 2>/dev/null
+    exec bash "$LOCAL_DP_PATH"
+}
+
 if [ "$1" == "-f" ]; then
     handle_compose_file_mode
     exit 0
@@ -244,17 +286,18 @@ while true; do
     echo " 4 全局虚拟网络集群列表"
     echo " 5 Docker 安全百宝箱"
     echo " 6 注册为全局 dp 快捷键"
+    echo " 7 在线更新本脚本 (同步 GitHub 最新版)"
     echo " 9 列出50条内置命令"
     echo " 0 安全退出控制台"
     echo "--------------------------------------------------------------------------------"
-    
+
     show_education_commands
-    
+
     echo "--------------------------------------------------------------------------------"
-    read -r -p "请选择操作 [0-6, 9]: " m
+    read -r -p "请选择操作 [0-7, 9]: " m
     case $m in
         1) manage_install_uninstall ;;
-        2) 
+        2)
             if [ "$(check_compose_file)" = "false" ]; then
                 echo -e "\n\033[31m⚠️ 提示: 当前目录下未检测到任何 docker-compose.yaml/yml 配置文件！\033[0m"
             else
@@ -262,32 +305,35 @@ while true; do
                 docker compose ps
             fi
             ;;
-        3) 
+        3)
             echo -e "\n--- 全局容器盘点 ---"
             docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
             ;;
-        4) 
+        4)
             echo -e "\n--- 全局虚拟网络集群 ---"
-            docker network ls 
+            docker network ls
             ;;
-        5) 
+        5)
             echo -e "\n\033[36m🔄 正在拉取并执行 Docker 安全百宝箱...\033[0m"
             bash <(curl -fsSL "https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-tool-install.sh?v=$(date +%s)")
             ;;
-        6) 
+        6)
             echo "正在通过您的远程链接下载并注册全局快捷键 'dp'..."
-            curl -fsSL "https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-install-dp.sh" -o /usr/local/bin/dp
-            chmod +x /usr/local/bin/dp
+            curl -fsSL "${SCRIPT_REMOTE_URL}?v=$(date +%s)" -o "$LOCAL_DP_PATH"
+            chmod +x "$LOCAL_DP_PATH"
             echo -e "\n\033[32m🎉 注册并同步成功！以后可在任何路径直接输入 'dp' 或 'dp -f' 运行。\033[0m"
+            ;;
+        7)
+            update_self_script
             ;;
         9)
             list_all_50_commands
             ;;
-        0) 
+        0)
             echo "正常退出。"
-            exit 0 
+            exit 0
             ;;
-        *) 
+        *)
             echo -e "\033[31m选择无效，请重新选择。\033[0m"
             sleep 0.5
             continue
