@@ -18,7 +18,7 @@ services:
       - ADMIN_USERNAME={PARAM_ADMIN_USERNAME}
       - ADMIN_PASSWORD={PARAM_ADMIN_PASSWORD}
 #END
-#START 
+#START
 #NAME:npm服务
 #PARAM_PORT:端口
   npm:
@@ -31,5 +31,48 @@ services:
     volumes:
       - ./npm:/app
     command: sh -c "npm install && npm start"
+#END
+#START
+#NAME:PostgreSQL 15
+#PARAM_PORT:端口
+#PARAM_POSTGRES_USER:用户名
+#PARAM_POSTGRES_PASSWORD:密码
+#PARAM_POSTGRES_DB:数据库名
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    restart: always
+    ports:
+      - "{PARAM_PORT}:5432"
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER={PARAM_POSTGRES_USER}
+      - POSTGRES_PASSWORD={PARAM_POSTGRES_PASSWORD}
+      - POSTGRES_DB={PARAM_POSTGRES_DB}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+#END
+#START
+#NAME:Redis 7
+#PARAM_PORT:端口
+#PARAM_REDIS_PASSWORD:密码
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: always
+    ports:
+      - "{PARAM_PORT}:6379"
+    volumes:
+      - ./redis/data:/data
+    command: redis-server --appendonly yes --requirepass {PARAM_REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "{PARAM_REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 #END
 
