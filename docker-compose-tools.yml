@@ -57,11 +57,11 @@ services:
       retries: 5
 #END
 #START
-#NAME:Redis 7
+#NAME:Redis 8
 #PARAM_PORT:端口
 #PARAM_REDIS_PASSWORD:密码
   redis:
-    image: redis:7
+    image: redis:8
     container_name: redis
     restart: always
     ports:
