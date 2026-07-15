@@ -173,22 +173,50 @@ _install_service() {
     clear
     echo -e "${C_CYAN}📥 正在初始化 [ $NAME ] 部署向导...${C_RESET}"
     echo -e "${LINE_GRAY}"
-    
-    # 动态解析所有需要交互填写的参数
+    echo -e "${C_GRAY}💡 提示：直接回车将使用方括号中的默认值（如有）。${C_RESET}"
+    echo -e "${LINE_GRAY}"
+
+    # 动态解析参数，支持 #PARAM_KEY:描述=默认值
     mapfile -t PARAM_LINES < <(echo "$R_BLOCK" | grep -oP "^#PARAM_[a-zA-Z0-9_]+:[^\r\n]+")
-    
+
     local CONF_BLOCK="$R_BLOCK"
     for p in "${PARAM_LINES[@]}"; do
         if [ -z "$p" ]; then continue; fi
-        local P_KEY=$(echo "$p" | cut -d':' -f1 | sed 's/^#//')
-        local P_DESC=$(echo "$p" | cut -d':' -f2-)
-        read -p "✏️  请输入 $P_DESC : " U_IN
+        local P_KEY
+        P_KEY=$(echo "$p" | cut -d':' -f1 | sed 's/^#//')
+        local P_FULL
+        P_FULL=$(echo "$p" | cut -d':' -f2-)
+        local P_DESC="$P_FULL"
+        local P_DEFAULT=""
+        # 格式: 描述=默认值 （仅第一个 = 分隔）
+        if [[ "$P_FULL" == *"="* ]]; then
+            P_DESC="${P_FULL%%=*}"
+            P_DEFAULT="${P_FULL#*=}"
+        fi
+
+        local U_IN=""
+        if [ -n "$P_DEFAULT" ]; then
+            read -p "✏️  请输入 ${P_DESC} [回车默认: ${P_DEFAULT}]: " U_IN
+            if [ -z "$U_IN" ]; then
+                U_IN="$P_DEFAULT"
+                echo -e "${C_GRAY}   → 已使用默认值: ${P_DEFAULT}${C_RESET}"
+            fi
+        else
+            # 无默认值时允许空，但仍提示
+            read -p "✏️  请输入 ${P_DESC}: " U_IN
+            while [ -z "$U_IN" ]; do
+                echo -e "${C_YELLOW}   该项无默认值，不能为空。${C_RESET}"
+                read -p "✏️  请输入 ${P_DESC}: " U_IN
+            done
+        fi
+
         # 注入用户输入，使用管道符作为定界符防止路径斜杠干扰
         CONF_BLOCK=$(echo "$CONF_BLOCK" | sed "s|{$P_KEY}|$U_IN|g")
     done
 
     # 剔除所有的控制标签，生成纯净的 yaml 块
-    local CLEAN_BLOCK=$(echo "$CONF_BLOCK" | grep -vE "^#(START|END|NAME|PARAM_)")
+    local CLEAN_BLOCK
+    CLEAN_BLOCK=$(echo "$CONF_BLOCK" | grep -vE "^#(START|END|NAME|PARAM_)")
 
     # 配置合并与冲突管控逻辑
     echo -e "${LINE_GRAY}"

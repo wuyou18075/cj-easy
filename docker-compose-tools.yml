@@ -3,9 +3,9 @@ version: '3.8'
 services:
 #START
 #NAME:探针监控komari
-#PARAM_PORT:端口
-#PARAM_ADMIN_USERNAME:管理员用户名
-#PARAM_ADMIN_PASSWORD:管理员密码  
+#PARAM_PORT:端口=25774
+#PARAM_ADMIN_USERNAME:管理员用户名=admin
+#PARAM_ADMIN_PASSWORD:管理员密码=admin
   komari:
     image: ghcr.io/komari-monitor/komari:latest
     container_name: komari
@@ -20,7 +20,7 @@ services:
 #END
 #START
 #NAME:npm服务
-#PARAM_PORT:端口
+#PARAM_PORT:端口=80
   npm:
     image: node:18-alpine
     container_name: npm
@@ -34,10 +34,10 @@ services:
 #END
 #START
 #NAME:PostgreSQL 18
-#PARAM_PORT:端口
-#PARAM_POSTGRES_USER:用户名
-#PARAM_POSTGRES_PASSWORD:密码
-#PARAM_POSTGRES_DB:数据库名
+#PARAM_PORT:端口=5432
+#PARAM_POSTGRES_USER:用户名=postgres
+#PARAM_POSTGRES_PASSWORD:密码=postgres
+#PARAM_POSTGRES_DB:数据库名=postgres
   postgres:
     image: postgres:18
     container_name: postgres
@@ -58,8 +58,8 @@ services:
 #END
 #START
 #NAME:Redis 8.2
-#PARAM_PORT:端口
-#PARAM_REDIS_PASSWORD:密码
+#PARAM_PORT:端口=6379
+#PARAM_REDIS_PASSWORD:密码=redis
   redis:
     image: redis:8.2.7
     container_name: redis
@@ -75,4 +75,3 @@ services:
       timeout: 5s
       retries: 5
 #END
-
