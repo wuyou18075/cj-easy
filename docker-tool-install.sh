@@ -165,31 +165,59 @@ backup_compose_yaml() {
 # 核心功能模块: 动态应用安装与生命周期管理
 # ==========================================
 
-# 获取公网 IP（多源回退）；失败则回退内网 IP / 127.0.0.1
+# 获取公网 IP（优先 IPv4；多源回退）；失败则回退内网 IP / 127.0.0.1
 _get_public_ip() {
     local ip=""
     local u
+    # 1) 优先强制 IPv4，避免 URL 拼端口时 IPv6 无方括号
     for u in \
-        "https://ip.sb" \
-        "https://ifconfig.me/ip" \
         "https://api.ipify.org" \
-        "https://icanhazip.com" \
+        "https://ipv4.icanhazip.com" \
+        "https://ifconfig.me/ip" \
+        "https://ip.sb" \
         "https://checkip.amazonaws.com"
     do
-        ip=$(curl -fsS -m 3 "$u" 2>/dev/null | tr -d '[:space:]\r')
-        # 粗校验 IPv4 / 简单 IPv6
-        if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || [[ "$ip" =~ ^[0-9a-fA-F:]+$ && "$ip" == *:* ]]; then
+        ip=$(curl -4 -fsS -m 3 "$u" 2>/dev/null | tr -d '[:space:]\r')
+        if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
             echo "$ip"
             return 0
         fi
     done
-    # 回退：本机首个非 loopback 地址
-    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    # 2) 再试普通请求（可能返回 IPv6）
+    for u in \
+        "https://api64.ipify.org" \
+        "https://icanhazip.com" \
+        "https://ifconfig.me/ip" \
+        "https://ip.sb"
+    do
+        ip=$(curl -fsS -m 3 "$u" 2>/dev/null | tr -d '[:space:]\r')
+        if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+            echo "$ip"
+            return 0
+        fi
+        # IPv6：至少含一个冒号且不是纯端口数字
+        if [[ "$ip" == *:* && "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+    # 3) 回退：本机首个 IPv4
+    ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
     if [ -n "$ip" ]; then
         echo "$ip"
         return 0
     fi
     echo "127.0.0.1"
+}
+
+# 把 host 拼成 URL 可用形式：IPv6 必须加 []
+_format_host_for_url() {
+    local host="$1"
+    if [[ "$host" == *:* && "$host" != \[* ]]; then
+        echo "[${host}]"
+    else
+        echo "$host"
+    fi
 }
 
 # 读取容器对外映射的主机端口；失败则用默认值
@@ -198,7 +226,8 @@ _get_host_port() {
     local container_port="$2"
     local default_port="$3"
     local mapped
-    mapped=$(docker port "$cname" "$container_port" 2>/dev/null | head -n 1 | awk -F: '{print $NF}' | tr -d ' \r')
+    # docker port 输出可能是 0.0.0.0:18317 或 [::]:18317
+    mapped=$(docker port "$cname" "$container_port" 2>/dev/null | head -n 1 | sed -E 's/.*:([0-9]+)$/\1/' | tr -d ' \r')
     if [[ "$mapped" =~ ^[0-9]+$ ]]; then
         echo "$mapped"
     else
@@ -414,13 +443,14 @@ _install_service() {
 
     # 个别应用安装后的访问提示
     if echo "${SVC_KEYS[*]}" | grep -qw "cpa-manager-plus"; then
-        local PUB_IP HOST_PORT
+        local PUB_IP HOST_PORT PUB_HOST
         echo -e "${C_GRAY}🌐 正在获取公网 IP...${C_RESET}"
         PUB_IP=$(_get_public_ip)
+        PUB_HOST=$(_format_host_for_url "$PUB_IP")
         HOST_PORT=$(_get_host_port "cpa-manager-plus" "18317" "${VAL_CPAMP_PORT:-18317}")
         echo -e "${LINE_GRAY}"
         echo -e "${C_CYAN}📌 CPA + CPAMP 使用提示（按官方文档）：${C_RESET}"
-        echo -e "  面板地址(公网): ${C_YELLOW}http://${PUB_IP}:${HOST_PORT}/management.html${C_RESET}"
+        echo -e "  面板地址(公网): ${C_YELLOW}http://${PUB_HOST}:${HOST_PORT}/management.html${C_RESET}"
         echo -e "  面板地址(本机): ${C_YELLOW}http://127.0.0.1:${HOST_PORT}/management.html${C_RESET}"
         echo -e "  健康检查: ${C_YELLOW}curl http://127.0.0.1:${HOST_PORT}/health${C_RESET}"
         if [ -n "$VAL_ADMIN_KEY" ]; then
