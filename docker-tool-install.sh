@@ -22,8 +22,11 @@ DOCKER_ROOT="/app/docker"
 YAML_FILE="${DOCKER_ROOT}/docker-compose.yml"
 YAML_BAK_DIR="${DOCKER_ROOT}/yaml-bak"
 REMOTE_TOOLS_URL="https://raw.githubusercontent.com/wuyou18075/cj-easy/main/docker-compose-tools.yml"
+# GitHub API 几乎不走 raw CDN 缓存，作为主通道失败时的保底
+REMOTE_TOOLS_API_URL="https://api.github.com/repos/wuyou18075/cj-easy/contents/docker-compose-tools.yml?ref=main"
+# jsDelivr 镜像备用
+REMOTE_TOOLS_CDN_URL="https://cdn.jsdelivr.net/gh/wuyou18075/cj-easy@main/docker-compose-tools.yml"
 TEMP_TOOLS="/tmp/remote_docker_tools.yml"
-# 每次拉取都带时间戳，尽量绕过 raw.githubusercontent CDN 缓存
 
 # 初始化环境依赖
 mkdir -p "$DOCKER_ROOT"
@@ -33,15 +36,119 @@ mkdir -p "$YAML_BAK_DIR"
 # 核心功能: 动态云端应用商店拉取与解析
 # ==========================================
 
-fetch_remote_tools() {
-    echo -e "${C_CYAN}🔄 正在与云端应用库同步数据...${C_RESET}"
-    # 带时间戳参数，降低 raw CDN 返回旧内容的概率
-    curl -sSL -m 10 -H "Cache-Control: no-cache" -H "Pragma: no-cache" \
-        "${REMOTE_TOOLS_URL}?v=$(date +%s)" -o "$TEMP_TOOLS"
-    if [ ! -s "$TEMP_TOOLS" ]; then
-        echo -e "${C_RED}❌ 云端仓库拉取失败，请检查网络或 URL 是否正确。${C_RESET}"
-        sleep 2
+# 判定下载内容是否是有效的工具模板（至少含 #NAME: 与 #START）
+_is_valid_tools_yml() {
+    local f="$1"
+    [ -s "$f" ] || return 1
+    grep -qE "^#NAME:" "$f" || return 1
+    grep -qE "^#START" "$f" || return 1
+    # 排除 GitHub 404 HTML / JSON 错误页
+    grep -qE "404: Not Found|\"message\": \"Not Found\"" "$f" && return 1
+    return 0
+}
+
+# 彻底清理本地缓存与 curl 残留，避免读到旧文件
+_clear_tools_cache() {
+    rm -f "$TEMP_TOOLS" \
+          "${TEMP_TOOLS}.tmp" \
+          "${TEMP_TOOLS}.api" \
+          "${TEMP_TOOLS}.cdn" 2>/dev/null || true
+}
+
+# 从 GitHub Contents API 拉文件内容（base64），绕过 raw CDN
+_fetch_tools_via_github_api() {
+    local out="$1"
+    local api_json="${TEMP_TOOLS}.api"
+    # API 带时间戳，并声明不要缓存
+    if ! curl -fsSL -m 15 \
+        -H "Accept: application/vnd.github.raw" \
+        -H "Cache-Control: no-cache, no-store, must-revalidate" \
+        -H "Pragma: no-cache" \
+        -H "Expires: 0" \
+        "${REMOTE_TOOLS_API_URL}&ts=$(date +%s%N)" \
+        -o "$out"; then
+        # Accept: raw 失败时再走 JSON + base64 解码
+        if curl -fsSL -m 15 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Cache-Control: no-cache, no-store, must-revalidate" \
+            -H "Pragma: no-cache" \
+            "${REMOTE_TOOLS_API_URL}&ts=$(date +%s%N)" \
+            -o "$api_json"; then
+            if command -v python3 >/dev/null 2>&1; then
+                python3 - "$api_json" "$out" <<'PY'
+import base64, json, sys
+src, dst = sys.argv[1], sys.argv[2]
+with open(src, "r", encoding="utf-8") as f:
+    data = json.load(f)
+content = data.get("content", "")
+if not content:
+    sys.exit(1)
+with open(dst, "wb") as f:
+    f.write(base64.b64decode(content))
+PY
+            elif command -v jq >/dev/null 2>&1; then
+                jq -r '.content' "$api_json" | tr -d '\n' | base64 -d > "$out" 2>/dev/null
+            else
+                return 1
+            fi
+        else
+            return 1
+        fi
     fi
+    _is_valid_tools_yml "$out"
+}
+
+fetch_remote_tools() {
+    echo -e "${C_CYAN}🔄 正在与云端应用库同步数据（强制去缓存）...${C_RESET}"
+
+    # 1) 先删本地缓存，杜绝读旧文件
+    _clear_tools_cache
+
+    local bust
+    bust="$(date +%s%N 2>/dev/null || date +%s)_$$_${RANDOM}"
+    local tmp="${TEMP_TOOLS}.tmp"
+
+    # 2) 主通道：raw + 强去缓存头 + 随机 query
+    if curl -fsSL -m 15 \
+        --http1.1 \
+        -H "Cache-Control: no-cache, no-store, must-revalidate" \
+        -H "Pragma: no-cache" \
+        -H "Expires: 0" \
+        -H "If-None-Match:" \
+        -H "If-Modified-Since:" \
+        "${REMOTE_TOOLS_URL}?v=${bust}&nocache=${bust}" \
+        -o "$tmp" \
+        && _is_valid_tools_yml "$tmp"; then
+        mv -f "$tmp" "$TEMP_TOOLS"
+        echo -e "${C_GREEN}✅ 已从 raw 源拉取最新工具表${C_RESET}"
+        return 0
+    fi
+
+    # 3) 备用：GitHub API（基本不受 raw CDN 影响）
+    echo -e "${C_YELLOW}⚠️ raw 源异常或疑似缓存，改走 GitHub API...${C_RESET}"
+    if _fetch_tools_via_github_api "$tmp"; then
+        mv -f "$tmp" "$TEMP_TOOLS"
+        echo -e "${C_GREEN}✅ 已从 GitHub API 拉取最新工具表${C_RESET}"
+        return 0
+    fi
+
+    # 4) 再备用：jsDelivr 镜像
+    echo -e "${C_YELLOW}⚠️ GitHub API 也失败，尝试 jsDelivr 镜像...${C_RESET}"
+    if curl -fsSL -m 15 \
+        -H "Cache-Control: no-cache, no-store, must-revalidate" \
+        -H "Pragma: no-cache" \
+        "${REMOTE_TOOLS_CDN_URL}?v=${bust}" \
+        -o "$tmp" \
+        && _is_valid_tools_yml "$tmp"; then
+        mv -f "$tmp" "$TEMP_TOOLS"
+        echo -e "${C_GREEN}✅ 已从 jsDelivr 拉取工具表${C_RESET}"
+        return 0
+    fi
+
+    rm -f "$tmp" 2>/dev/null || true
+    echo -e "${C_RED}❌ 云端仓库拉取失败（raw / API / CDN 均不可用），请检查 WSL 网络或 GitHub 连通性。${C_RESET}"
+    sleep 2
+    return 1
 }
 
 # 规则: 配置文件自动备份并仅保留最近 10 份
@@ -358,8 +465,8 @@ while true; do
         echo -e "👋 安全退出百宝箱。"
         exit 0
     elif [ "$MAIN_OPT" == "98" ]; then
-        rm -f "$TEMP_TOOLS"
-        echo -e "${C_CYAN}🔄 已清理本地缓存，即将重新同步云端应用库...${C_RESET}"
+        _clear_tools_cache
+        echo -e "${C_CYAN}🔄 已清理本地缓存（含临时残留），即将强制重新同步云端应用库...${C_RESET}"
         sleep 1
         continue
     elif [ "$MAIN_OPT" == "99" ]; then

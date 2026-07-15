@@ -33,13 +33,13 @@ services:
     command: sh -c "npm install && npm start"
 #END
 #START
-#NAME:PostgreSQL 15
+#NAME:PostgreSQL 18
 #PARAM_PORT:端口
 #PARAM_POSTGRES_USER:用户名
 #PARAM_POSTGRES_PASSWORD:密码
 #PARAM_POSTGRES_DB:数据库名
   postgres:
-    image: postgres:15
+    image: postgres:18
     container_name: postgres
     restart: always
     ports:
