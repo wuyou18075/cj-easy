@@ -173,7 +173,7 @@ _install_service() {
     clear
     echo -e "${C_CYAN}📥 正在初始化 [ $NAME ] 部署向导...${C_RESET}"
     echo -e "${LINE_GRAY}"
-    echo -e "${C_GRAY}💡 提示：直接回车将使用方括号中的默认值（如有）。${C_RESET}"
+    echo -e "${C_YELLOW}💡 有默认值的项：直接回车 = 使用默认值；输入新值后回车 = 覆盖默认值。${C_RESET}"
     echo -e "${LINE_GRAY}"
 
     # 动态解析参数，支持 #PARAM_KEY:描述=默认值
@@ -196,18 +196,25 @@ _install_service() {
 
         local U_IN=""
         if [ -n "$P_DEFAULT" ]; then
-            read -p "✏️  请输入 ${P_DESC} [回车默认: ${P_DEFAULT}]: " U_IN
+            # 明确展示默认值，并提示回车即用默认
+            echo -e "✏️  ${P_DESC}"
+            echo -e "   ${C_GREEN}默认值: ${P_DEFAULT}${C_RESET}  ${C_GRAY}(直接回车使用默认值)${C_RESET}"
+            read -p "   请输入: " U_IN
             if [ -z "$U_IN" ]; then
                 U_IN="$P_DEFAULT"
-                echo -e "${C_GRAY}   → 已使用默认值: ${P_DEFAULT}${C_RESET}"
+                echo -e "   ${C_GREEN}→ 已采用默认值: ${P_DEFAULT}${C_RESET}"
+            else
+                echo -e "   ${C_CYAN}→ 已采用自定义值: ${U_IN}${C_RESET}"
             fi
         else
-            # 无默认值时允许空，但仍提示
-            read -p "✏️  请输入 ${P_DESC}: " U_IN
+            # 无默认值：必须手动填写
+            echo -e "✏️  ${P_DESC}  ${C_YELLOW}(无默认值，必填)${C_RESET}"
+            read -p "   请输入: " U_IN
             while [ -z "$U_IN" ]; do
-                echo -e "${C_YELLOW}   该项无默认值，不能为空。${C_RESET}"
-                read -p "✏️  请输入 ${P_DESC}: " U_IN
+                echo -e "   ${C_YELLOW}该项无默认值，不能为空，请重新输入。${C_RESET}"
+                read -p "   请输入: " U_IN
             done
+            echo -e "   ${C_CYAN}→ 已采用: ${U_IN}${C_RESET}"
         fi
 
         # 注入用户输入，使用管道符作为定界符防止路径斜杠干扰
