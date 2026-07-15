@@ -77,27 +77,48 @@ services:
       retries: 5
 #END
 #START
-#NAME:CPA Manager Plus
-#PARAM_PORT:端口=18317
+#NAME:CPA + CPAMP 完整栈
+#PARAM_CPAMP_PORT:CPAMP面板端口=18317
+#PARAM_CPA_PORT:CPA网关端口=8317
+#PARAM_ADMIN_KEY:CPAMP管理员密钥(登录management.html用)
+#PARAM_CPA_MGMT_KEY:CPA Management Key(remote-management.secret-key)
+#PARAM_CPA_API_KEY:CPA客户端API Key(可选演示用)=sk-demo-change-me
+  cli-proxy-api:
+    image: eceasy/cli-proxy-api:latest
+    container_name: cli-proxy-api
+    restart: always
+    ports:
+      - "{PARAM_CPA_PORT}:8317"
+    volumes:
+      - ./cli-proxy-api/config.yaml:/CLIProxyAPI/config.yaml
+      - ./cli-proxy-api/auths:/root/.cli-proxy-api
+      - ./cli-proxy-api/logs:/CLIProxyAPI/logs
   cpa-manager-plus:
     image: seakee/cpa-manager-plus:latest
     container_name: cpa-manager-plus
     restart: always
     ports:
-      - "{PARAM_PORT}:18317"
+      - "{PARAM_CPAMP_PORT}:18317"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       - HTTP_ADDR=0.0.0.0:18317
       - USAGE_DB_PATH=/data/usage.sqlite
       - CPA_MANAGER_DATA_KEY_PATH=/data/data.key
+      - CPA_MANAGER_ADMIN_KEY={PARAM_ADMIN_KEY}
+      - CPA_UPSTREAM_URL=http://cli-proxy-api:8317
+      - CPA_MANAGEMENT_KEY={PARAM_CPA_MGMT_KEY}
       - USAGE_COLLECTOR_MODE=auto
+      - USAGE_RESP_QUEUE=usage
+      - USAGE_RESP_POP_SIDE=right
       - USAGE_BATCH_SIZE=100
       - USAGE_POLL_INTERVAL_MS=500
       - USAGE_QUERY_LIMIT=50000
       - USAGE_CORS_ORIGINS=*
     volumes:
       - ./cpa-manager-plus/data:/data
+    depends_on:
+      - cli-proxy-api
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18317/health"]
       interval: 10s

@@ -206,21 +206,84 @@ _get_host_port() {
     fi
 }
 
+# 从模板块中提取全部服务键（支持多服务栈）
+_extract_service_keys() {
+    echo "$1" | grep -E "^  [a-zA-Z0-9_-]+:" | awk -F':' '{print $1}' | tr -d ' \r'
+}
+
+# 为 CPA / CLIProxyAPI 写入官方要求的 config.yaml
+# 文档: remote-management.secret-key + allow-remote + usage-statistics-enabled
+_write_cpa_config_yaml() {
+    local mgmt_key="$1"
+    local api_key="$2"
+    local conf_dir="${DOCKER_ROOT}/cli-proxy-api"
+    local conf_file="${conf_dir}/config.yaml"
+
+    mkdir -p "${conf_dir}/auths" "${conf_dir}/logs" "${DOCKER_ROOT}/cpa-manager-plus/data"
+
+    # 简单转义双引号，避免破坏 YAML
+    local esc_mgmt esc_api
+    esc_mgmt=$(printf '%s' "$mgmt_key" | sed 's/"/\\"/g')
+    esc_api=$(printf '%s' "$api_key" | sed 's/"/\\"/g')
+
+    cat > "$conf_file" <<EOF
+host: "0.0.0.0"
+port: 8317
+
+remote-management:
+  secret-key: "${esc_mgmt}"
+  allow-remote: true
+  disable-control-panel: false
+  disable-auto-update-panel: true
+  panel-github-repository: "https://github.com/seakee/CPA-Manager-Plus"
+
+usage-statistics-enabled: true
+redis-usage-queue-retention-seconds: 60
+
+auth-dir: "/root/.cli-proxy-api"
+
+api-keys:
+  - "${esc_api}"
+EOF
+    chmod 600 "$conf_file" 2>/dev/null || true
+
+    # 本地留一份密钥备忘（权限收紧）
+    local note="${DOCKER_ROOT}/cpa-manager-plus/INSTALL_SECRETS.txt"
+    {
+        echo "CPA Management Key: ${mgmt_key}"
+        echo "CPA Client API Key: ${api_key}"
+        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    } > "$note"
+    chmod 600 "$note" 2>/dev/null || true
+
+    echo -e "${C_GREEN}✅ 已写入 CPA 配置: ${conf_file}${C_RESET}"
+}
+
 _install_service() {
     local NAME="$1"
     local R_BLOCK="$2"
-    local S_KEY="$3"
+    # 兼容旧调用：第 3 个参数可能是单个 key；优先从块内解析全部 key
+    local -a SVC_KEYS=()
+    mapfile -t SVC_KEYS < <(_extract_service_keys "$R_BLOCK")
+    if [ ${#SVC_KEYS[@]} -eq 0 ] && [ -n "${3:-}" ]; then
+        SVC_KEYS=("$3")
+    fi
+    local PRIMARY_KEY="${SVC_KEYS[0]}"
 
     clear
     echo -e "${C_CYAN}📥 正在初始化 [ $NAME ] 部署向导...${C_RESET}"
     echo -e "${LINE_GRAY}"
     echo -e "${C_YELLOW}💡 有默认值的项：直接回车 = 使用默认值；输入新值后回车 = 覆盖默认值。${C_RESET}"
+    echo -e "${C_YELLOW}💡 无默认值的密钥/密码项：必须手动输入（可自行设定）。${C_RESET}"
     echo -e "${LINE_GRAY}"
 
     # 动态解析参数，支持 #PARAM_KEY:描述=默认值
     mapfile -t PARAM_LINES < <(echo "$R_BLOCK" | grep -oP "^#PARAM_[a-zA-Z0-9_]+:[^\r\n]+")
 
     local CONF_BLOCK="$R_BLOCK"
+    # 记录关键参数，供安装后提示与 CPA config 生成
+    local VAL_ADMIN_KEY="" VAL_CPA_MGMT_KEY="" VAL_CPA_API_KEY="" VAL_CPAMP_PORT="18317" VAL_CPA_PORT="8317"
+
     for p in "${PARAM_LINES[@]}"; do
         if [ -z "$p" ]; then continue; fi
         local P_KEY
@@ -248,8 +311,8 @@ _install_service() {
                 echo -e "   ${C_CYAN}→ 已采用自定义值: ${U_IN}${C_RESET}"
             fi
         else
-            # 无默认值：必须手动填写
-            echo -e "✏️  ${P_DESC}  ${C_YELLOW}(无默认值，必填)${C_RESET}"
+            # 无默认值：必须手动填写（密钥/密码类）
+            echo -e "✏️  ${P_DESC}  ${C_YELLOW}(无默认值，必填，请自行设定)${C_RESET}"
             read -p "   请输入: " U_IN
             while [ -z "$U_IN" ]; do
                 echo -e "   ${C_YELLOW}该项无默认值，不能为空，请重新输入。${C_RESET}"
@@ -257,6 +320,14 @@ _install_service() {
             done
             echo -e "   ${C_CYAN}→ 已采用: ${U_IN}${C_RESET}"
         fi
+
+        case "$P_KEY" in
+            PARAM_ADMIN_KEY) VAL_ADMIN_KEY="$U_IN" ;;
+            PARAM_CPA_MGMT_KEY) VAL_CPA_MGMT_KEY="$U_IN" ;;
+            PARAM_CPA_API_KEY) VAL_CPA_API_KEY="$U_IN" ;;
+            PARAM_CPAMP_PORT|PARAM_PORT) VAL_CPAMP_PORT="$U_IN" ;;
+            PARAM_CPA_PORT) VAL_CPA_PORT="$U_IN" ;;
+        esac
 
         # 注入用户输入，使用管道符作为定界符防止路径斜杠干扰
         CONF_BLOCK=$(echo "$CONF_BLOCK" | sed "s|{$P_KEY}|$U_IN|g")
@@ -266,8 +337,32 @@ _install_service() {
     local CLEAN_BLOCK
     CLEAN_BLOCK=$(echo "$CONF_BLOCK" | grep -vE "^#(START|END|NAME|PARAM_)")
 
+    # CPA 完整栈：安装前写入官方要求的 config.yaml
+    if echo "${SVC_KEYS[*]}" | grep -qw "cli-proxy-api"; then
+        if [ -z "$VAL_CPA_MGMT_KEY" ]; then
+            echo -e "${C_RED}❌ 缺少 CPA Management Key，无法生成 config.yaml${C_RESET}"
+            read -p "回车返回..." temp
+            return
+        fi
+        [ -z "$VAL_CPA_API_KEY" ] && VAL_CPA_API_KEY="sk-demo-change-me"
+        _write_cpa_config_yaml "$VAL_CPA_MGMT_KEY" "$VAL_CPA_API_KEY"
+        # 把管理员密钥也记入备忘
+        if [ -n "$VAL_ADMIN_KEY" ]; then
+            echo "CPAMP Admin Key: ${VAL_ADMIN_KEY}" >> "${DOCKER_ROOT}/cpa-manager-plus/INSTALL_SECRETS.txt"
+            chmod 600 "${DOCKER_ROOT}/cpa-manager-plus/INSTALL_SECRETS.txt" 2>/dev/null || true
+        fi
+    fi
+
     # 配置合并与冲突管控逻辑
     echo -e "${LINE_GRAY}"
+    local conflict=0
+    for k in "${SVC_KEYS[@]}"; do
+        if [ -f "$YAML_FILE" ] && grep -qE "^  ${k}:" "$YAML_FILE"; then
+            conflict=1
+            break
+        fi
+    done
+
     if [ ! -f "$YAML_FILE" ]; then
         echo "version: '3.8'" > "$YAML_FILE"
         echo "" >> "$YAML_FILE"
@@ -275,9 +370,8 @@ _install_service() {
         echo "$CLEAN_BLOCK" >> "$YAML_FILE"
         echo -e "${C_GREEN}✅ 检测到本地为空，已创建根配置并写入模块！${C_RESET}"
     else
-        # 检索服务键值是否已存在于本地 (例如 "  komari:")
-        if grep -qE "^  ${S_KEY}:" "$YAML_FILE"; then
-            echo -e "${C_YELLOW}⚠️ 警告：检测到本地文件已存在 [ ${S_KEY} ] 服务的配置冲突！${C_RESET}"
+        if [ "$conflict" -eq 1 ]; then
+            echo -e "${C_YELLOW}⚠️ 警告：检测到本地文件已存在相关服务配置冲突！(${SVC_KEYS[*]})${C_RESET}"
             echo "1) 手动解决 (屏幕将展示新模块，随后自动打开 nano 供您合并)"
             echo "2) 直接丢弃本地配置 (危险：将完全覆盖重写文件，旧有其他服务将被清空！)"
             echo "0) 取消安装"
@@ -312,25 +406,36 @@ _install_service() {
         fi
     fi
 
-    # 唤醒容器启动流程
-    echo -e "${C_CYAN}🚀 正在调用 Docker 引擎拉起服务...${C_RESET}"
+    # 唤醒容器启动流程（支持多服务）
+    echo -e "${C_CYAN}🚀 正在调用 Docker 引擎拉起服务: ${SVC_KEYS[*]} ...${C_RESET}"
     cd "$DOCKER_ROOT" || return
-    docker compose up -d "$S_KEY"
+    docker compose up -d "${SVC_KEYS[@]}"
     echo -e "${C_GREEN}🎉 部署动作全部完成！${C_RESET}"
 
     # 个别应用安装后的访问提示
-    if [ "$S_KEY" = "cpa-manager-plus" ]; then
+    if echo "${SVC_KEYS[*]}" | grep -qw "cpa-manager-plus"; then
         local PUB_IP HOST_PORT
         echo -e "${C_GRAY}🌐 正在获取公网 IP...${C_RESET}"
         PUB_IP=$(_get_public_ip)
-        HOST_PORT=$(_get_host_port "cpa-manager-plus" "18317" "18317")
+        HOST_PORT=$(_get_host_port "cpa-manager-plus" "18317" "${VAL_CPAMP_PORT:-18317}")
         echo -e "${LINE_GRAY}"
-        echo -e "${C_CYAN}📌 CPA Manager Plus 使用提示：${C_RESET}"
+        echo -e "${C_CYAN}📌 CPA + CPAMP 使用提示（按官方文档）：${C_RESET}"
         echo -e "  面板地址(公网): ${C_YELLOW}http://${PUB_IP}:${HOST_PORT}/management.html${C_RESET}"
         echo -e "  面板地址(本机): ${C_YELLOW}http://127.0.0.1:${HOST_PORT}/management.html${C_RESET}"
         echo -e "  健康检查: ${C_YELLOW}curl http://127.0.0.1:${HOST_PORT}/health${C_RESET}"
-        echo -e "  管理员密钥: 首次启动会在日志打印一次 → ${C_YELLOW}docker logs cpa-manager-plus${C_RESET}"
-        echo -e "  Setup 时 CPA 在宿主机可填: ${C_YELLOW}http://host.docker.internal:8317${C_RESET}"
+        if [ -n "$VAL_ADMIN_KEY" ]; then
+            echo -e "  CPAMP 管理员密钥: ${C_YELLOW}${VAL_ADMIN_KEY}${C_RESET}"
+        else
+            echo -e "  管理员密钥: 查看日志 ${C_YELLOW}docker logs cpa-manager-plus${C_RESET}"
+        fi
+        if [ -n "$VAL_CPA_MGMT_KEY" ]; then
+            echo -e "  CPA Management Key: ${C_YELLOW}${VAL_CPA_MGMT_KEY}${C_RESET}"
+        fi
+        echo -e "  同网 CPA URL(setup 用): ${C_YELLOW}http://cli-proxy-api:8317${C_RESET}"
+        echo -e "  CPA 网关端口: ${C_YELLOW}${VAL_CPA_PORT:-8317}${C_RESET}"
+        echo -e "  密钥备忘: ${C_YELLOW}${DOCKER_ROOT}/cpa-manager-plus/INSTALL_SECRETS.txt${C_RESET}"
+        echo -e "  CPA 配置: ${C_YELLOW}${DOCKER_ROOT}/cli-proxy-api/config.yaml${C_RESET}"
+        echo -e "${C_GRAY}  说明: 已通过环境变量写入 CPA_UPSTREAM_URL / CPA_MANAGEMENT_KEY / ADMIN_KEY，一般可跳过首次 setup 手填连接。${C_RESET}"
     fi
 
     read -p "按回车键返回上级菜单..." temp
@@ -339,19 +444,34 @@ _install_service() {
 manage_service() {
     local SELECTED_NAME="$1"
     # 精准抽取对应的 START 和 END 之间的文本块
-    local RAW_BLOCK=$(awk "/#START/{f=1; buf=\"\"} f{buf=buf \$0 ORS} /#END/{if(buf ~ /#NAME:${SELECTED_NAME}/) {print buf; exit} f=0}" "$TEMP_TOOLS")
-    
+    local RAW_BLOCK
+    # 用 index 做字面量匹配，避免 NAME 中的 + . * 等破坏正则
+    RAW_BLOCK=$(SELECTED_NAME="$SELECTED_NAME" awk '
+        BEGIN { target = "#NAME:" ENVIRON["SELECTED_NAME"] }
+        /^#START/ { f=1; buf="" }
+        f { buf = buf $0 ORS }
+        /^#END/ {
+            if (f && index(buf, target) > 0) { printf "%s", buf; exit }
+            f=0
+        }
+    ' "$TEMP_TOOLS")
+
     if [ -z "$RAW_BLOCK" ]; then
         echo -e "${C_RED}❌ 未能从远程模板中解析到该应用数据！${C_RESET}"
         sleep 1; return
     fi
 
-    # 提取 docker-compose 中真实的服务组件标识 (如 "komari")
-    local SVC_KEY=$(echo "$RAW_BLOCK" | grep -E "^  [a-zA-Z0-9_-]+:" | head -n 1 | awk -F':' '{print $1}' | tr -d ' \r')
+    # 提取全部服务键（多服务栈）
+    local -a SVC_KEYS=()
+    mapfile -t SVC_KEYS < <(_extract_service_keys "$RAW_BLOCK")
+    local SVC_KEY="${SVC_KEYS[0]}"
+    local SVC_LABEL
+    SVC_LABEL=$(IFS=,; echo "${SVC_KEYS[*]}")
 
     while true; do
         clear
-        echo -e "${C_BLUE}⚡ Docker 矩阵应用控制台: ${C_YELLOW}$SELECTED_NAME${C_RESET} (组件映射: $SVC_KEY)"
+        echo -e "${C_BLUE}⚡ Docker 矩阵应用控制台: ${C_YELLOW}$SELECTED_NAME${C_RESET}"
+        echo -e "   组件映射: ${C_CYAN}${SVC_LABEL}${C_RESET}"
         echo -e "${LINE_GRAY}"
         echo " 1) 安装 (云端参数解析与部署)"
         echo " 2) 更新镜像 (Pull 最新版本并平滑重启)"
@@ -371,30 +491,30 @@ manage_service() {
             2)
                 echo -e "${C_CYAN}🔄 正在追溯最新镜像...${C_RESET}"
                 cd "$DOCKER_ROOT" || return
-                docker compose pull "$SVC_KEY"
-                docker compose up -d "$SVC_KEY"
+                docker compose pull "${SVC_KEYS[@]}"
+                docker compose up -d "${SVC_KEYS[@]}"
                 read -p "操作完毕，回车继续..." temp
                 ;;
             3)
                 cd "$DOCKER_ROOT" || return
-                docker compose start "$SVC_KEY" 2>/dev/null || docker compose up -d "$SVC_KEY"
+                docker compose start "${SVC_KEYS[@]}" 2>/dev/null || docker compose up -d "${SVC_KEYS[@]}"
                 read -p "操作完毕，回车继续..." temp
                 ;;
             4)
                 cd "$DOCKER_ROOT" || return
-                docker compose restart "$SVC_KEY"
+                docker compose restart "${SVC_KEYS[@]}"
                 read -p "操作完毕，回车继续..." temp
                 ;;
             5)
                 cd "$DOCKER_ROOT" || return
-                docker compose stop "$SVC_KEY"
+                docker compose stop "${SVC_KEYS[@]}"
                 read -p "操作完毕，回车继续..." temp
                 ;;
             6)
                 echo -e "${C_YELLOW}🗑️ 正在阻断并销毁容器资产...${C_RESET}"
                 cd "$DOCKER_ROOT" || return
-                docker compose stop "$SVC_KEY" 2>/dev/null
-                docker compose rm -f -s "$SVC_KEY" 2>/dev/null
+                docker compose stop "${SVC_KEYS[@]}" 2>/dev/null
+                docker compose rm -f -s "${SVC_KEYS[@]}" 2>/dev/null
                 echo -e "${C_GREEN}✅ 容器节点已切除。若需清除底层配置代码，请手动使用 nano 修改 yaml 文件。${C_RESET}"
                 read -p "回车继续..." temp
                 ;;
@@ -402,12 +522,17 @@ manage_service() {
                 read -p "⚠️ 极危警告：确定要彻底销毁容器、并强制删除宿主机上的映射数据文件夹吗？[y/N]: " is_del
                 if [[ "$is_del" =~ ^[Yy]$ ]]; then
                     cd "$DOCKER_ROOT" || return
-                    docker compose stop "$SVC_KEY" 2>/dev/null
-                    docker compose rm -f -s "$SVC_KEY" 2>/dev/null
-                    
-                    # 清扫关联的宿主机目录 (匹配约定规则)
-                    if [ -d "${DOCKER_ROOT}/${SVC_KEY}" ]; then
-                        sudo rm -rf "${DOCKER_ROOT}/${SVC_KEY}"
+                    docker compose stop "${SVC_KEYS[@]}" 2>/dev/null
+                    docker compose rm -f -s "${SVC_KEYS[@]}" 2>/dev/null
+                    for k in "${SVC_KEYS[@]}"; do
+                        if [ -d "${DOCKER_ROOT}/${k}" ]; then
+                            sudo rm -rf "${DOCKER_ROOT}/${k}"
+                        fi
+                    done
+                    # CPA 栈额外目录
+                    if echo "${SVC_KEYS[*]}" | grep -qw "cli-proxy-api"; then
+                        [ -d "${DOCKER_ROOT}/cli-proxy-api" ] && sudo rm -rf "${DOCKER_ROOT}/cli-proxy-api"
+                        [ -d "${DOCKER_ROOT}/cpa-manager-plus" ] && sudo rm -rf "${DOCKER_ROOT}/cpa-manager-plus"
                     fi
                     echo -e "${C_GREEN}✅ 容器及物理数据源已被连根拔起！记得清理 docker-compose.yml 遗留代码。${C_RESET}"
                 else
