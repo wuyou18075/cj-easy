@@ -720,7 +720,7 @@ manage_service() {
         echo " 3) 启动 (Start)"
         echo " 4) 重启 (Restart)"
         echo " 5) 停止 (Stop)"
-        echo " 6) 卸载 (仅强制清除容器)"
+        echo " 6) 卸载 (清除容器 + 清理 compose 配置，保留数据目录)"
         echo " 7) 抹除 (深度清除容器、挂载目录与 compose 配置)"
         echo " 8) 查看初始化信息 (登录地址/密钥)"
         echo " 0) 返回上层大厅"
@@ -754,11 +754,14 @@ manage_service() {
                 read -p "操作完毕，回车继续..." temp
                 ;;
             6)
-                echo -e "${C_YELLOW}🗑️ 正在阻断并销毁容器资产...${C_RESET}"
+                echo -e "${C_YELLOW}🗑️ 正在卸载：清除容器，并同步清理 docker-compose.yml 服务配置...${C_RESET}"
+                echo -e "${C_GRAY}（数据目录默认保留；若要连数据一起删请用 7 抹除）${C_RESET}"
                 cd "$DOCKER_ROOT" || return
                 docker compose stop "${SVC_KEYS[@]}" 2>/dev/null
                 docker compose rm -f -s "${SVC_KEYS[@]}" 2>/dev/null
-                echo -e "${C_GREEN}✅ 容器节点已切除（保留 compose 配置与数据目录，便于再启动）。${C_RESET}"
+                # 卸载同样自动清理 compose 遗留服务块
+                _remove_services_from_compose "${SVC_KEYS[@]}"
+                echo -e "${C_GREEN}✅ 卸载完成：容器已删除，compose 配置已清理；数据目录仍保留在 ${DOCKER_ROOT}/ 下。${C_RESET}"
                 read -p "回车继续..." temp
                 ;;
             7)
@@ -779,7 +782,7 @@ manage_service() {
                     fi
                     # 自动清理 compose 遗留服务块
                     _remove_services_from_compose "${SVC_KEYS[@]}"
-                    echo -e "${C_GREEN}✅ 容器、数据目录与 compose 配置均已清除完毕。${C_RESET}"
+                    echo -e "${C_GREEN}✅ 抹除完成：容器、数据目录与 compose 配置均已清除。${C_RESET}"
                 else
                     echo -e "${C_GRAY}数据销毁动作已终止。${C_RESET}"
                 fi
