@@ -83,20 +83,28 @@ services:
 #PARAM_ADMIN_KEY:CPAMP管理员密钥(登录management.html用)
 #PARAM_CPA_MGMT_KEY:CPA Management Key(remote-management.secret-key)
 #PARAM_CPA_API_KEY:CPA客户端API Key(可选演示用)=sk-demo-change-me
+  # 对齐官方 docker-compose：多端口为 OAuth/回调/插件本地监听；auths 持久化避免重复装插件
   cli-proxy-api:
     image: eceasy/cli-proxy-api:latest
+    pull_policy: always
     container_name: cli-proxy-api
-    restart: always
+    restart: unless-stopped
     ports:
       - "{PARAM_CPA_PORT}:8317"
+      - "8085:8085"
+      - "1455:1455"
+      - "54545:54545"
+      - "51121:51121"
+      - "11451:11451"
     volumes:
       - ./cli-proxy-api/config.yaml:/CLIProxyAPI/config.yaml
       - ./cli-proxy-api/auths:/root/.cli-proxy-api
       - ./cli-proxy-api/logs:/CLIProxyAPI/logs
   cpa-manager-plus:
     image: seakee/cpa-manager-plus:latest
+    pull_policy: always
     container_name: cpa-manager-plus
-    restart: always
+    restart: unless-stopped
     ports:
       - "{PARAM_CPAMP_PORT}:18317"
     extra_hosts:
