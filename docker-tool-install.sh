@@ -443,7 +443,7 @@ _write_cpa_config_yaml() {
     local conf_dir="${DOCKER_ROOT}/cli-proxy-api"
     local conf_file="${conf_dir}/config.yaml"
 
-    mkdir -p "${conf_dir}/auths" "${conf_dir}/logs" "${DOCKER_ROOT}/cpa-manager-plus/data"
+    mkdir -p "${conf_dir}/auths" "${conf_dir}/logs" "${conf_dir}/plugins" "${DOCKER_ROOT}/cpa-manager-plus/data"
 
     # 简单转义双引号，避免破坏 YAML
     local esc_mgmt esc_api
@@ -468,6 +468,13 @@ auth-dir: "/root/.cli-proxy-api"
 
 api-keys:
   - "${esc_api}"
+
+# 插件默认全局关闭；面板安装插件后仍须 enabled=true 才会加载 .so
+# 注意: plugins.configs.<id>.enabled 不会自动打开全局开关
+plugins:
+  enabled: true
+  dir: "plugins"
+  configs: {}
 EOF
     chmod 600 "$conf_file" 2>/dev/null || true
 

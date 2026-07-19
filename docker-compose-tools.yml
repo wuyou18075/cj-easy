@@ -101,6 +101,8 @@ services:
       - ./cli-proxy-api/config.yaml:/CLIProxyAPI/config.yaml
       - ./cli-proxy-api/auths:/root/.cli-proxy-api
       - ./cli-proxy-api/logs:/CLIProxyAPI/logs
+      # 插件目录必须持久化，否则容器重建后 .so 丢失；并需 config 里 plugins.enabled=true
+      - ./cli-proxy-api/plugins:/CLIProxyAPI/plugins
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- -T 3 http://127.0.0.1:8317/ >/dev/null 2>&1 || exit 0"]
       interval: 10s
