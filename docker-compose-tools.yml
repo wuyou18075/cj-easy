@@ -83,6 +83,7 @@ services:
 #PARAM_ADMIN_KEY:CPAMP管理员密钥(登录management.html用)
 #PARAM_CPA_MGMT_KEY:CPA Management Key(remote-management.secret-key)
 #PARAM_CPA_API_KEY:CPA客户端API Key(可选演示用)=sk-demo-change-me
+  # 顺序固定：先 CPA(cli-proxy-api) 核心网关，再 CPAMP 面板（depends_on 亦约束）
   # 对齐官方 docker-compose：多端口为 OAuth/回调/插件本地监听；auths 持久化避免重复装插件
   cli-proxy-api:
     image: eceasy/cli-proxy-api:latest
@@ -100,6 +101,12 @@ services:
       - ./cli-proxy-api/config.yaml:/CLIProxyAPI/config.yaml
       - ./cli-proxy-api/auths:/root/.cli-proxy-api
       - ./cli-proxy-api/logs:/CLIProxyAPI/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- -T 3 http://127.0.0.1:8317/ >/dev/null 2>&1 || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
   cpa-manager-plus:
     image: seakee/cpa-manager-plus:latest
     pull_policy: always
@@ -126,7 +133,8 @@ services:
     volumes:
       - ./cpa-manager-plus/data:/data
     depends_on:
-      - cli-proxy-api
+      cli-proxy-api:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18317/health"]
       interval: 10s

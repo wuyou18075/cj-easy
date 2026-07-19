@@ -242,8 +242,79 @@ _get_host_port() {
 }
 
 # 从模板块中提取全部服务键（支持多服务栈）
+# 对 CPA 栈强制顺序：cli-proxy-api 先于 cpa-manager-plus
 _extract_service_keys() {
-    echo "$1" | grep -E "^  [a-zA-Z0-9_-]+:" | awk -F':' '{print $1}' | tr -d ' \r'
+    local raw="$1"
+    local -a keys=()
+    mapfile -t keys < <(echo "$raw" | grep -E "^  [a-zA-Z0-9_-]+:" | awk -F':' '{print $1}' | tr -d ' \r')
+    # 若同时含 CPA 与 CPAMP，固定依赖顺序
+    local has_cpa=0 has_cpamp=0
+    local k
+    for k in "${keys[@]}"; do
+        [ "$k" = "cli-proxy-api" ] && has_cpa=1
+        [ "$k" = "cpa-manager-plus" ] && has_cpamp=1
+    done
+    if [ "$has_cpa" -eq 1 ] && [ "$has_cpamp" -eq 1 ]; then
+        local -a ordered=()
+        ordered+=("cli-proxy-api")
+        for k in "${keys[@]}"; do
+            [ "$k" = "cli-proxy-api" ] && continue
+            [ "$k" = "cpa-manager-plus" ] && continue
+            ordered+=("$k")
+        done
+        ordered+=("cpa-manager-plus")
+        printf '%s\n' "${ordered[@]}"
+    else
+        printf '%s\n' "${keys[@]}"
+    fi
+}
+
+# 按依赖顺序拉起服务：CPA 先起并等端口就绪，再起 CPAMP
+_compose_up_services_ordered() {
+    local -a keys=("$@")
+    if [ ${#keys[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    # 一般情况：一次 up 即可（compose 会尊重 depends_on）
+    # CPA 栈：显式先 up cli-proxy-api，再 up 其余，避免 plus 先就绪却连不上 CPA
+    local has_cpa=0 has_cpamp=0
+    local k
+    for k in "${keys[@]}"; do
+        [ "$k" = "cli-proxy-api" ] && has_cpa=1
+        [ "$k" = "cpa-manager-plus" ] && has_cpamp=1
+    done
+
+    if [ "$has_cpa" -eq 1 ] && [ "$has_cpamp" -eq 1 ]; then
+        echo -e "${C_CYAN}① 先启动 CPA 核心: cli-proxy-api ...${C_RESET}"
+        docker compose up -d cli-proxy-api
+        # 等 CPA 端口起来（最多约 60s）
+        local i
+        for i in $(seq 1 30); do
+            if docker compose ps cli-proxy-api 2>/dev/null | grep -qiE "Up|running"; then
+                # 容器在跑即可；HTTP 可能还没 ready，再给几秒
+                if curl -fsS -m 2 -o /dev/null "http://127.0.0.1:8317/" 2>/dev/null \
+                    || curl -fsS -m 2 -o /dev/null "http://127.0.0.1:8317/v0/management" 2>/dev/null \
+                    || docker compose exec -T cli-proxy-api wget -qO- -T 2 http://127.0.0.1:8317/ >/dev/null 2>&1; then
+                    echo -e "${C_GREEN}   cli-proxy-api 已就绪${C_RESET}"
+                    break
+                fi
+            fi
+            sleep 2
+            if [ "$i" -eq 30 ]; then
+                echo -e "${C_YELLOW}   提示: cli-proxy-api 启动较慢或端口未响应，继续拉起 CPAMP（depends_on 仍会约束顺序）${C_RESET}"
+            fi
+        done
+        echo -e "${C_CYAN}② 再启动监控面板: cpa-manager-plus ...${C_RESET}"
+        local -a rest=()
+        for k in "${keys[@]}"; do
+            [ "$k" = "cli-proxy-api" ] && continue
+            rest+=("$k")
+        done
+        docker compose up -d "${rest[@]}"
+    else
+        docker compose up -d "${keys[@]}"
+    fi
 }
 
 # 保存并打印 CPA+CPAMP 初始化信息（含 CPA 独立访问）
@@ -552,11 +623,12 @@ _install_service() {
         fi
     fi
 
-    # 唤醒容器启动流程（支持多服务）
-    echo -e "${C_CYAN}🚀 正在调用 Docker 引擎拉起服务: ${SVC_KEYS[*]} ...${C_RESET}"
+    # 唤醒容器启动流程（支持多服务；CPA 栈强制先 CPA 后 Plus）
+    echo -e "${C_CYAN}🚀 正在按依赖顺序拉起服务: ${SVC_KEYS[*]} ...${C_RESET}"
     cd "$DOCKER_ROOT" || return
-    docker compose up -d "${SVC_KEYS[@]}"
+    _compose_up_services_ordered "${SVC_KEYS[@]}"
     echo -e "${C_GREEN}🎉 部署动作全部完成！${C_RESET}"
+
 
     # 个别应用安装后的访问提示
     if echo "${SVC_KEYS[*]}" | grep -qw "cpa-manager-plus"; then
@@ -864,12 +936,13 @@ manage_service() {
                 echo -e "${C_CYAN}🔄 正在追溯最新镜像...${C_RESET}"
                 cd "$DOCKER_ROOT" || return
                 docker compose pull "${SVC_KEYS[@]}"
-                docker compose up -d "${SVC_KEYS[@]}"
+                _compose_up_services_ordered "${SVC_KEYS[@]}"
                 read -p "操作完毕，回车继续..." temp
                 ;;
             3)
                 cd "$DOCKER_ROOT" || return
-                docker compose start "${SVC_KEYS[@]}" 2>/dev/null || docker compose up -d "${SVC_KEYS[@]}"
+                # start 失败则按顺序 up
+                docker compose start "${SVC_KEYS[@]}" 2>/dev/null || _compose_up_services_ordered "${SVC_KEYS[@]}"
                 read -p "操作完毕，回车继续..." temp
                 ;;
             4)
