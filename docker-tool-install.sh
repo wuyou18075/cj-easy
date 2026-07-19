@@ -579,6 +579,110 @@ _install_service() {
     read -p "按回车键返回上级菜单..." temp
 }
 
+# 从本地 docker-compose.yml 删除指定服务块（顶层 "  key:" 到下一个同级服务前）
+_remove_services_from_compose() {
+    local yaml="$YAML_FILE"
+    if [ ! -f "$yaml" ]; then
+        echo -e "${C_GRAY}本地无 compose 文件，跳过 YAML 清理。${C_RESET}"
+        return 0
+    fi
+    if [ "$#" -lt 1 ]; then
+        return 0
+    fi
+
+    backup_compose_yaml
+
+    # 把服务名列表交给 python 处理（缩进安全、支持多服务）
+    local keys_csv
+    keys_csv=$(IFS=,; echo "$*")
+
+    if command -v python3 >/dev/null 2>&1; then
+        KEYS_CSV="$keys_csv" YAML_PATH="$yaml" python3 - <<'PY'
+import os, re
+from pathlib import Path
+
+yaml_path = Path(os.environ["YAML_PATH"])
+keys = {k.strip() for k in os.environ["KEYS_CSV"].split(",") if k.strip()}
+if not keys:
+    raise SystemExit(0)
+
+text = yaml_path.read_text(encoding="utf-8", errors="replace")
+# 统一换行
+lines = text.splitlines(keepends=True)
+out = []
+i = 0
+removed = []
+svc_re = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?\r?\n?$")
+
+while i < len(lines):
+    m = svc_re.match(lines[i])
+    if m and m.group(1) in keys:
+        name = m.group(1)
+        removed.append(name)
+        i += 1
+        # 跳过该服务体：直到下一个「两空格开头且非更多缩进的服务键」或文件顶层非缩进行
+        while i < len(lines):
+            line = lines[i]
+            # 下一个同级服务
+            if svc_re.match(line):
+                break
+            # services: 之外的顶层（极少见）
+            if line.startswith("volumes:") or line.startswith("networks:") or (
+                line and not line[0].isspace() and not line.startswith("#") and line.strip() != ""
+            ):
+                # 若是 version/services 头保留；volumes 顶层可能是 compose 的 volumes: 段
+                if line.startswith("version:") or line.startswith("services:"):
+                    break
+                # named volumes 段：若前面服务删完仍可能存在，先停在这里让外层处理
+                if line.startswith("volumes:") or line.startswith("networks:"):
+                    break
+            i += 1
+        continue
+    out.append(lines[i])
+    i += 1
+
+new_text = "".join(out)
+# 压缩多余空行
+new_text = re.sub(r"\n{3,}", "\n\n", new_text)
+yaml_path.write_text(new_text, encoding="utf-8")
+print("removed:" + ",".join(removed) if removed else "removed:")
+PY
+        local py_rc=$?
+        if [ $py_rc -eq 0 ]; then
+            echo -e "${C_GREEN}✅ 已从 docker-compose.yml 自动清除服务配置: ${keys_csv}${C_RESET}"
+            # 若 services 下已无任何服务，保留空壳也可；可选提示
+            if ! grep -qE "^  [a-zA-Z0-9_-]+:" "$yaml" 2>/dev/null; then
+                echo -e "${C_GRAY}提示: compose 中已无任何服务块（仅剩文件头）。${C_RESET}"
+            fi
+            return 0
+        fi
+        echo -e "${C_YELLOW}⚠️ Python 清理失败，尝试 awk 回退...${C_RESET}"
+    fi
+
+    # awk 回退：逐个 key 删除
+    local tmp="${yaml}.tmp.$$"
+    cp "$yaml" "$tmp"
+    local k
+    for k in "$@"; do
+        [ -z "$k" ] && continue
+        awk -v key="$k" '
+            BEGIN { skip=0 }
+            {
+                if ($0 ~ ("^  " key ":[[:space:]]*($|#)")) { skip=1; next }
+                if (skip) {
+                    if ($0 ~ /^  [A-Za-z0-9_-]+:[[:space:]]*($|#)/) { skip=0 }
+                    else if ($0 ~ /^(version:|services:|volumes:|networks:)/) { skip=0 }
+                    else if ($0 ~ /^[^[:space:]#]/ && $0 !~ /^$/) { skip=0 }
+                    else next
+                }
+                if (!skip) print
+            }
+        ' "$tmp" > "${tmp}.out" && mv "${tmp}.out" "$tmp"
+    done
+    mv "$tmp" "$yaml"
+    echo -e "${C_GREEN}✅ 已从 docker-compose.yml 自动清除服务配置: ${keys_csv}${C_RESET}"
+}
+
 manage_service() {
     local SELECTED_NAME="$1"
     # 精准抽取对应的 START 和 END 之间的文本块
@@ -617,7 +721,7 @@ manage_service() {
         echo " 4) 重启 (Restart)"
         echo " 5) 停止 (Stop)"
         echo " 6) 卸载 (仅强制清除容器)"
-        echo " 7) 抹除 (深度清除容器及本地挂载目录)"
+        echo " 7) 抹除 (深度清除容器、挂载目录与 compose 配置)"
         echo " 8) 查看初始化信息 (登录地址/密钥)"
         echo " 0) 返回上层大厅"
         echo -e "${LINE_GRAY}"
@@ -654,11 +758,11 @@ manage_service() {
                 cd "$DOCKER_ROOT" || return
                 docker compose stop "${SVC_KEYS[@]}" 2>/dev/null
                 docker compose rm -f -s "${SVC_KEYS[@]}" 2>/dev/null
-                echo -e "${C_GREEN}✅ 容器节点已切除。若需清除底层配置代码，请手动使用 nano 修改 yaml 文件。${C_RESET}"
+                echo -e "${C_GREEN}✅ 容器节点已切除（保留 compose 配置与数据目录，便于再启动）。${C_RESET}"
                 read -p "回车继续..." temp
                 ;;
             7)
-                read -p "⚠️ 极危警告：确定要彻底销毁容器、并强制删除宿主机上的映射数据文件夹吗？[y/N]: " is_del
+                read -p "⚠️ 极危警告：确定要彻底销毁容器、删除挂载数据，并自动清除 docker-compose.yml 中的服务配置吗？[y/N]: " is_del
                 if [[ "$is_del" =~ ^[Yy]$ ]]; then
                     cd "$DOCKER_ROOT" || return
                     docker compose stop "${SVC_KEYS[@]}" 2>/dev/null
@@ -673,7 +777,9 @@ manage_service() {
                         [ -d "${DOCKER_ROOT}/cli-proxy-api" ] && sudo rm -rf "${DOCKER_ROOT}/cli-proxy-api"
                         [ -d "${DOCKER_ROOT}/cpa-manager-plus" ] && sudo rm -rf "${DOCKER_ROOT}/cpa-manager-plus"
                     fi
-                    echo -e "${C_GREEN}✅ 容器及物理数据源已被连根拔起！记得清理 docker-compose.yml 遗留代码。${C_RESET}"
+                    # 自动清理 compose 遗留服务块
+                    _remove_services_from_compose "${SVC_KEYS[@]}"
+                    echo -e "${C_GREEN}✅ 容器、数据目录与 compose 配置均已清除完毕。${C_RESET}"
                 else
                     echo -e "${C_GRAY}数据销毁动作已终止。${C_RESET}"
                 fi
