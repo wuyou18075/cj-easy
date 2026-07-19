@@ -628,9 +628,41 @@ _remove_app_from_compose() {
 
     if grep -qF "$begin_m" "$yaml" 2>/dev/null; then
         # 精确按 BEGIN/END 标记删除整区
-        BEGIN_M="$begin_m" END_M="$end_m" YAML_PATH="$yaml" python3 - <<'PY' 2>/dev/null || {
-            # awk 回退
-            local tmp="${yaml}.tmp.$$"
+        local tmp="${yaml}.tmp.$$"
+        local ok=0
+        if command -v python3 >/dev/null 2>&1; then
+            BEGIN_M="$begin_m" END_M="$end_m" YAML_PATH="$yaml" OUT_PATH="$tmp" python3 - <<'PY'
+import os
+from pathlib import Path
+src = Path(os.environ["YAML_PATH"])
+dst = Path(os.environ["OUT_PATH"])
+begin = os.environ["BEGIN_M"]
+end = os.environ["END_M"]
+lines = src.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+out = []
+skip = False
+for line in lines:
+    s = line.rstrip("\r\n")
+    if s.startswith(begin):
+        skip = True
+        continue
+    if skip and s.startswith(end):
+        skip = False
+        continue
+    if not skip:
+        out.append(line)
+text = "".join(out)
+while "\n\n\n" in text:
+    text = text.replace("\n\n\n", "\n\n")
+dst.write_text(text, encoding="utf-8")
+print("ok")
+PY
+            if [ -s "$tmp" ] || [ -f "$tmp" ]; then
+                mv "$tmp" "$yaml"
+                ok=1
+            fi
+        fi
+        if [ "$ok" -ne 1 ]; then
             BEGIN_M="$begin_m" END_M="$end_m" awk '
                 BEGIN {
                     b = ENVIRON["BEGIN_M"]
@@ -641,34 +673,8 @@ _remove_app_from_compose() {
                 skip && index($0, e) == 1 { skip = 0; next }
                 !skip { print }
             ' "$yaml" > "$tmp" && mv "$tmp" "$yaml"
-        }
-import os
-from pathlib import Path
-yaml_path = Path(os.environ["YAML_PATH"])
-begin = os.environ["BEGIN_M"]
-end = os.environ["END_M"]
-lines = yaml_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-out = []
-skip = False
-removed = False
-for line in lines:
-    s = line.rstrip("\r\n")
-    if s.startswith(begin):
-        skip = True
-        removed = True
-        continue
-    if skip and s.startswith(end):
-        skip = False
-        continue
-    if not skip:
-        out.append(line)
-# 压缩多余空行
-text = "".join(out)
-while "\n\n\n" in text:
-    text = text.replace("\n\n\n", "\n\n")
-yaml_path.write_text(text, encoding="utf-8")
-print("marker_removed" if removed else "marker_not_found")
-PY
+        fi
+        rm -f "$tmp" 2>/dev/null || true
         echo -e "${C_GREEN}✅ 已按分区标记清除应用配置: ${app_name}${C_RESET}"
         return 0
     fi
