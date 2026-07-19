@@ -507,51 +507,35 @@ _install_service() {
     fi
 
     # 配置合并与冲突管控逻辑
-    # 冲突 = 仅检测「本应用自己的服务键」是否已在 compose 中；覆盖也只替换这些键，绝不整文件清空
+    # 每个应用写入时用 #TOOLBOX_BEGIN/END:<应用名> 分区标记；覆盖/卸载只动本分区
     echo -e "${LINE_GRAY}"
-    local -a CONFLICT_KEYS=()
-    local k
-    for k in "${SVC_KEYS[@]}"; do
-        if [ -f "$YAML_FILE" ] && grep -qE "^  ${k}:" "$YAML_FILE"; then
-            CONFLICT_KEYS+=("$k")
-        fi
-    done
+    local APP_NAME="$NAME"
 
     if [ ! -f "$YAML_FILE" ]; then
-        echo "version: '3.8'" > "$YAML_FILE"
-        echo "" >> "$YAML_FILE"
-        echo "services:" >> "$YAML_FILE"
-        echo "$CLEAN_BLOCK" >> "$YAML_FILE"
-        echo -e "${C_GREEN}✅ 检测到本地为空，已创建根配置并写入模块！${C_RESET}"
+        _append_app_to_compose "$APP_NAME" "$CLEAN_BLOCK"
+        echo -e "${C_GREEN}✅ 检测到本地为空，已创建根配置并写入应用分区 [${APP_NAME}]${C_RESET}"
     else
-        if [ ${#CONFLICT_KEYS[@]} -gt 0 ]; then
-            echo -e "${C_YELLOW}⚠️ 检测到本应用服务已存在于 compose 中：${CONFLICT_KEYS[*]}${C_RESET}"
-            echo -e "${C_GRAY}（仅影响上述服务；postgres/redis 等其它服务不会被动）${C_RESET}"
-            echo "1) 覆盖本应用配置 (删除上述服务块 → 写入最新配置，其它服务保留) ${C_GREEN}【推荐】${C_RESET}"
-            echo "2) 手动解决 (展示新模块后打开 nano 自行合并)"
+        if _compose_has_app "$APP_NAME" "${SVC_KEYS[@]}"; then
+            echo -e "${C_YELLOW}⚠️ 检测到应用分区已存在: ${APP_NAME}${C_RESET}"
+            echo -e "${C_GRAY}（仅替换本应用 #TOOLBOX_BEGIN/END 分区；其它应用完全不动）${C_RESET}"
+            echo "1) 覆盖本应用配置 (删本分区 → 写最新) ${C_GREEN}【推荐】${C_RESET}"
+            echo "2) 手动解决 (展示新模块后打开 nano)"
             echo "0) 取消安装"
             echo -e "${LINE_GRAY}"
             read -p "请选择 [0-2，直接回车=1]: " c_opt
             [ -z "$c_opt" ] && c_opt="1"
 
             if [ "$c_opt" == "1" ]; then
-                # 只删掉冲突的本应用服务块，再追加新配置
-                _remove_services_from_compose "${CONFLICT_KEYS[@]}"
-                # 若文件被删空了 services 头，补回来
-                if [ ! -f "$YAML_FILE" ] || ! grep -qE "^services:" "$YAML_FILE" 2>/dev/null; then
-                    echo "version: '3.8'" > "$YAML_FILE"
-                    echo "" >> "$YAML_FILE"
-                    echo "services:" >> "$YAML_FILE"
-                fi
-                # 确保以换行结尾再追加
-                [ -s "$YAML_FILE" ] && [ "$(tail -c 1 "$YAML_FILE" | wc -l)" -eq 0 ] && echo "" >> "$YAML_FILE"
-                echo "$CLEAN_BLOCK" >> "$YAML_FILE"
-                echo -e "${C_GREEN}✅ 已仅覆盖本应用服务（${CONFLICT_KEYS[*]}），其它服务配置保留。${C_RESET}"
+                _remove_app_from_compose "$APP_NAME" "${SVC_KEYS[@]}"
+                _append_app_to_compose "$APP_NAME" "$CLEAN_BLOCK"
+                echo -e "${C_GREEN}✅ 已覆盖应用分区 [${APP_NAME}]，其它服务保留。${C_RESET}"
             elif [ "$c_opt" == "2" ]; then
                 backup_compose_yaml
                 clear
                 echo -e "${C_CYAN}========== 即将注入的新模块代码 ==========${C_RESET}"
+                echo "$(_toolbox_begin_line "$APP_NAME")"
                 echo "$CLEAN_BLOCK"
+                echo "$(_toolbox_end_line "$APP_NAME")"
                 echo -e "${C_CYAN}==========================================${C_RESET}"
                 echo -e "💡 提示：请参考上方的代码，在接下来的编辑器中修改或合并您的本地旧配置。"
                 read -p "准备就绪后，按回车键唤醒 nano 编辑器..." temp
@@ -563,10 +547,8 @@ _install_service() {
             fi
         else
             backup_compose_yaml
-            # 确保以换行结尾再追加
-            [ -s "$YAML_FILE" ] && [ "$(tail -c 1 "$YAML_FILE" | wc -l)" -eq 0 ] && echo "" >> "$YAML_FILE"
-            echo "$CLEAN_BLOCK" >> "$YAML_FILE"
-            echo -e "${C_GREEN}✅ 无冲突！已将新模块拼接到本地配置末尾。${C_RESET}"
+            _append_app_to_compose "$APP_NAME" "$CLEAN_BLOCK"
+            echo -e "${C_GREEN}✅ 无冲突！已追加应用分区 [${APP_NAME}]${C_RESET}"
         fi
     fi
 
@@ -590,7 +572,148 @@ _install_service() {
     read -p "按回车键返回上级菜单..." temp
 }
 
+# ==========================================
+# compose 分区标记：每个应用一块，避免误伤其它服务
+# 写入本地 docker-compose.yml 时用注释包裹：
+#   #TOOLBOX_BEGIN:<应用名>
+#   ... services yaml ...
+#   #TOOLBOX_END:<应用名>
+# ==========================================
+
+_toolbox_begin_line() {
+    echo "#TOOLBOX_BEGIN:$1"
+}
+
+_toolbox_end_line() {
+    echo "#TOOLBOX_END:$1"
+}
+
+# 检测本地 compose 是否已有某应用分区（优先标记；兼容旧的无标记安装）
+_compose_has_app() {
+    local app_name="$1"
+    shift
+    local yaml="$YAML_FILE"
+    [ -f "$yaml" ] || return 1
+    if grep -qF "$(_toolbox_begin_line "$app_name")" "$yaml" 2>/dev/null; then
+        return 0
+    fi
+    # 兼容旧安装：按服务键猜
+    local k
+    for k in "$@"; do
+        [ -z "$k" ] && continue
+        if grep -qE "^  ${k}:" "$yaml" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 按分区标记删除一整块；若无标记则回退按服务键删除
+_remove_app_from_compose() {
+    local app_name="$1"
+    shift
+    local -a keys=("$@")
+    local yaml="$YAML_FILE"
+
+    if [ ! -f "$yaml" ]; then
+        echo -e "${C_GRAY}本地无 compose 文件，跳过 YAML 清理。${C_RESET}"
+        return 0
+    fi
+
+    backup_compose_yaml
+
+    local begin_m end_m
+    begin_m=$(_toolbox_begin_line "$app_name")
+    end_m=$(_toolbox_end_line "$app_name")
+
+    if grep -qF "$begin_m" "$yaml" 2>/dev/null; then
+        # 精确按 BEGIN/END 标记删除整区
+        BEGIN_M="$begin_m" END_M="$end_m" YAML_PATH="$yaml" python3 - <<'PY' 2>/dev/null || {
+            # awk 回退
+            local tmp="${yaml}.tmp.$$"
+            BEGIN_M="$begin_m" END_M="$end_m" awk '
+                BEGIN {
+                    b = ENVIRON["BEGIN_M"]
+                    e = ENVIRON["END_M"]
+                    skip = 0
+                }
+                index($0, b) == 1 { skip = 1; next }
+                skip && index($0, e) == 1 { skip = 0; next }
+                !skip { print }
+            ' "$yaml" > "$tmp" && mv "$tmp" "$yaml"
+        }
+import os
+from pathlib import Path
+yaml_path = Path(os.environ["YAML_PATH"])
+begin = os.environ["BEGIN_M"]
+end = os.environ["END_M"]
+lines = yaml_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+out = []
+skip = False
+removed = False
+for line in lines:
+    s = line.rstrip("\r\n")
+    if s.startswith(begin):
+        skip = True
+        removed = True
+        continue
+    if skip and s.startswith(end):
+        skip = False
+        continue
+    if not skip:
+        out.append(line)
+# 压缩多余空行
+text = "".join(out)
+while "\n\n\n" in text:
+    text = text.replace("\n\n\n", "\n\n")
+yaml_path.write_text(text, encoding="utf-8")
+print("marker_removed" if removed else "marker_not_found")
+PY
+        echo -e "${C_GREEN}✅ 已按分区标记清除应用配置: ${app_name}${C_RESET}"
+        return 0
+    fi
+
+    # 无标记的旧安装：按服务键删除
+    if [ ${#keys[@]} -gt 0 ]; then
+        _remove_services_from_compose "${keys[@]}"
+    else
+        echo -e "${C_GRAY}未找到应用分区标记，且无服务键可清理。${C_RESET}"
+    fi
+}
+
+# 追加带分区标记的应用块到 compose
+_append_app_to_compose() {
+    local app_name="$1"
+    local clean_block="$2"
+    local yaml="$YAML_FILE"
+
+    if [ ! -f "$yaml" ]; then
+        echo "version: '3.8'" > "$yaml"
+        echo "" >> "$yaml"
+        echo "services:" >> "$yaml"
+    elif ! grep -qE "^services:" "$yaml" 2>/dev/null; then
+        # 异常文件：补 services 头
+        {
+            echo "version: '3.8'"
+            echo ""
+            echo "services:"
+            cat "$yaml"
+        } > "${yaml}.fix.$$" && mv "${yaml}.fix.$$" "$yaml"
+    fi
+
+    # 确保文件以换行结尾
+    [ -s "$yaml" ] && [ "$(tail -c 1 "$yaml" | wc -l)" -eq 0 ] && echo "" >> "$yaml"
+
+    {
+        echo "$(_toolbox_begin_line "$app_name")"
+        # clean_block 可能首尾带空行，原样写入
+        printf '%s\n' "$clean_block"
+        echo "$(_toolbox_end_line "$app_name")"
+    } >> "$yaml"
+}
+
 # 从本地 docker-compose.yml 删除指定服务块（顶层 "  key:" 到下一个同级服务前）
+# 仅作无标记旧安装的回退方案
 _remove_services_from_compose() {
     local yaml="$YAML_FILE"
     if [ ! -f "$yaml" ]; then
@@ -601,9 +724,9 @@ _remove_services_from_compose() {
         return 0
     fi
 
+    # 调用方若已 backup 可跳过；这里再 backup 一次也安全（时间戳不同）
     backup_compose_yaml
 
-    # 把服务名列表交给 python 处理（缩进安全、支持多服务）
     local keys_csv
     keys_csv=$(IFS=,; echo "$*")
 
@@ -618,7 +741,6 @@ if not keys:
     raise SystemExit(0)
 
 text = yaml_path.read_text(encoding="utf-8", errors="replace")
-# 统一换行
 lines = text.splitlines(keepends=True)
 out = []
 i = 0
@@ -631,21 +753,14 @@ while i < len(lines):
         name = m.group(1)
         removed.append(name)
         i += 1
-        # 跳过该服务体：直到下一个「两空格开头且非更多缩进的服务键」或文件顶层非缩进行
         while i < len(lines):
             line = lines[i]
-            # 下一个同级服务
             if svc_re.match(line):
                 break
-            # services: 之外的顶层（极少见）
             if line.startswith("volumes:") or line.startswith("networks:") or (
                 line and not line[0].isspace() and not line.startswith("#") and line.strip() != ""
             ):
-                # 若是 version/services 头保留；volumes 顶层可能是 compose 的 volumes: 段
-                if line.startswith("version:") or line.startswith("services:"):
-                    break
-                # named volumes 段：若前面服务删完仍可能存在，先停在这里让外层处理
-                if line.startswith("volumes:") or line.startswith("networks:"):
+                if line.startswith("version:") or line.startswith("services:") or line.startswith("volumes:") or line.startswith("networks:"):
                     break
             i += 1
         continue
@@ -653,15 +768,13 @@ while i < len(lines):
     i += 1
 
 new_text = "".join(out)
-# 压缩多余空行
 new_text = re.sub(r"\n{3,}", "\n\n", new_text)
 yaml_path.write_text(new_text, encoding="utf-8")
 print("removed:" + ",".join(removed) if removed else "removed:")
 PY
         local py_rc=$?
         if [ $py_rc -eq 0 ]; then
-            echo -e "${C_GREEN}✅ 已从 docker-compose.yml 自动清除服务配置: ${keys_csv}${C_RESET}"
-            # 若 services 下已无任何服务，保留空壳也可；可选提示
+            echo -e "${C_GREEN}✅ 已从 docker-compose.yml 按服务键清除: ${keys_csv}${C_RESET}"
             if ! grep -qE "^  [a-zA-Z0-9_-]+:" "$yaml" 2>/dev/null; then
                 echo -e "${C_GRAY}提示: compose 中已无任何服务块（仅剩文件头）。${C_RESET}"
             fi
@@ -670,7 +783,6 @@ PY
         echo -e "${C_YELLOW}⚠️ Python 清理失败，尝试 awk 回退...${C_RESET}"
     fi
 
-    # awk 回退：逐个 key 删除
     local tmp="${yaml}.tmp.$$"
     cp "$yaml" "$tmp"
     local k
@@ -691,7 +803,7 @@ PY
         ' "$tmp" > "${tmp}.out" && mv "${tmp}.out" "$tmp"
     done
     mv "$tmp" "$yaml"
-    echo -e "${C_GREEN}✅ 已从 docker-compose.yml 自动清除服务配置: ${keys_csv}${C_RESET}"
+    echo -e "${C_GREEN}✅ 已从 docker-compose.yml 按服务键清除: ${keys_csv}${C_RESET}"
 }
 
 manage_service() {
@@ -765,25 +877,25 @@ manage_service() {
                 read -p "操作完毕，回车继续..." temp
                 ;;
             6)
-                # 卸载：容器 + compose 配置；挂载数据目录保留（重装可复用密钥/auths/SQLite）
-                echo -e "${C_YELLOW}🗑️ 卸载将删除：容器 + docker-compose 服务配置${C_RESET}"
+                # 卸载：容器 + compose 本应用分区；挂载数据目录保留
+                echo -e "${C_YELLOW}🗑️ 卸载将删除：容器 + 本应用 compose 分区（#TOOLBOX_BEGIN/END）${C_RESET}"
                 echo -e "${C_GRAY}（挂载数据目录会保留，例如 auths / data / 密钥备忘）${C_RESET}"
                 read -p "确认卸载？[y/N]: " is_del
                 if [[ "$is_del" =~ ^[Yy]$ ]]; then
                     cd "$DOCKER_ROOT" || return
                     docker compose stop "${SVC_KEYS[@]}" 2>/dev/null
                     docker compose rm -f -s "${SVC_KEYS[@]}" 2>/dev/null
-                    _remove_services_from_compose "${SVC_KEYS[@]}"
-                    echo -e "${C_GREEN}✅ 卸载完成：容器与 compose 已清理；数据目录仍在 ${DOCKER_ROOT}/ 下。${C_RESET}"
+                    _remove_app_from_compose "$SELECTED_NAME" "${SVC_KEYS[@]}"
+                    echo -e "${C_GREEN}✅ 卸载完成：容器与本应用 compose 分区已清理；数据目录仍在 ${DOCKER_ROOT}/ 下。${C_RESET}"
                 else
                     echo -e "${C_GRAY}已取消。${C_RESET}"
                 fi
                 read -p "回车继续..." temp
                 ;;
             7)
-                # 抹除：容器 + 数据目录 + compose 全部清除
-                echo -e "${C_YELLOW}⚠️ 抹除将删除：容器 + 挂载数据目录 + docker-compose 服务配置${C_RESET}"
-                echo -e "${C_GRAY}（含密钥、SQLite、auths、INIT_INFO 等，不可恢复）${C_RESET}"
+                # 抹除：容器 + 数据目录 + compose 本应用分区
+                echo -e "${C_YELLOW}⚠️ 抹除将删除：容器 + 挂载数据目录 + 本应用 compose 分区${C_RESET}"
+                echo -e "${C_GRAY}（含密钥、SQLite、auths、INIT_INFO 等，不可恢复；其它应用不动）${C_RESET}"
                 read -p "确认抹除？[y/N]: " is_del
                 if [[ "$is_del" =~ ^[Yy]$ ]]; then
                     cd "$DOCKER_ROOT" || return
@@ -799,8 +911,8 @@ manage_service() {
                         [ -d "${DOCKER_ROOT}/cli-proxy-api" ] && sudo rm -rf "${DOCKER_ROOT}/cli-proxy-api" && echo -e "${C_GRAY}  已删除目录: ${DOCKER_ROOT}/cli-proxy-api${C_RESET}"
                         [ -d "${DOCKER_ROOT}/cpa-manager-plus" ] && sudo rm -rf "${DOCKER_ROOT}/cpa-manager-plus" && echo -e "${C_GRAY}  已删除目录: ${DOCKER_ROOT}/cpa-manager-plus${C_RESET}"
                     fi
-                    _remove_services_from_compose "${SVC_KEYS[@]}"
-                    echo -e "${C_GREEN}✅ 抹除完成：容器、数据与 compose 均已清除。${C_RESET}"
+                    _remove_app_from_compose "$SELECTED_NAME" "${SVC_KEYS[@]}"
+                    echo -e "${C_GREEN}✅ 抹除完成：本应用容器、数据与 compose 分区均已清除。${C_RESET}"
                 else
                     echo -e "${C_GRAY}已取消。${C_RESET}"
                 fi
