@@ -507,12 +507,13 @@ _install_service() {
     fi
 
     # 配置合并与冲突管控逻辑
+    # 冲突 = 仅检测「本应用自己的服务键」是否已在 compose 中；覆盖也只替换这些键，绝不整文件清空
     echo -e "${LINE_GRAY}"
-    local conflict=0
+    local -a CONFLICT_KEYS=()
+    local k
     for k in "${SVC_KEYS[@]}"; do
         if [ -f "$YAML_FILE" ] && grep -qE "^  ${k}:" "$YAML_FILE"; then
-            conflict=1
-            break
+            CONFLICT_KEYS+=("$k")
         fi
     done
 
@@ -523,15 +524,30 @@ _install_service() {
         echo "$CLEAN_BLOCK" >> "$YAML_FILE"
         echo -e "${C_GREEN}✅ 检测到本地为空，已创建根配置并写入模块！${C_RESET}"
     else
-        if [ "$conflict" -eq 1 ]; then
-            echo -e "${C_YELLOW}⚠️ 警告：检测到本地文件已存在相关服务配置冲突！(${SVC_KEYS[*]})${C_RESET}"
-            echo "1) 手动解决 (屏幕将展示新模块，随后自动打开 nano 供您合并)"
-            echo "2) 直接丢弃本地配置 (危险：将完全覆盖重写文件，旧有其他服务将被清空！)"
+        if [ ${#CONFLICT_KEYS[@]} -gt 0 ]; then
+            echo -e "${C_YELLOW}⚠️ 检测到本应用服务已存在于 compose 中：${CONFLICT_KEYS[*]}${C_RESET}"
+            echo -e "${C_GRAY}（仅影响上述服务；postgres/redis 等其它服务不会被动）${C_RESET}"
+            echo "1) 覆盖本应用配置 (删除上述服务块 → 写入最新配置，其它服务保留) ${C_GREEN}【推荐】${C_RESET}"
+            echo "2) 手动解决 (展示新模块后打开 nano 自行合并)"
             echo "0) 取消安装"
             echo -e "${LINE_GRAY}"
-            read -p "请选择冲突裁决方案 [0-2]: " c_opt
+            read -p "请选择 [0-2，直接回车=1]: " c_opt
+            [ -z "$c_opt" ] && c_opt="1"
 
             if [ "$c_opt" == "1" ]; then
+                # 只删掉冲突的本应用服务块，再追加新配置
+                _remove_services_from_compose "${CONFLICT_KEYS[@]}"
+                # 若文件被删空了 services 头，补回来
+                if [ ! -f "$YAML_FILE" ] || ! grep -qE "^services:" "$YAML_FILE" 2>/dev/null; then
+                    echo "version: '3.8'" > "$YAML_FILE"
+                    echo "" >> "$YAML_FILE"
+                    echo "services:" >> "$YAML_FILE"
+                fi
+                # 确保以换行结尾再追加
+                [ -s "$YAML_FILE" ] && [ "$(tail -c 1 "$YAML_FILE" | wc -l)" -eq 0 ] && echo "" >> "$YAML_FILE"
+                echo "$CLEAN_BLOCK" >> "$YAML_FILE"
+                echo -e "${C_GREEN}✅ 已仅覆盖本应用服务（${CONFLICT_KEYS[*]}），其它服务配置保留。${C_RESET}"
+            elif [ "$c_opt" == "2" ]; then
                 backup_compose_yaml
                 clear
                 echo -e "${C_CYAN}========== 即将注入的新模块代码 ==========${C_RESET}"
@@ -541,21 +557,16 @@ _install_service() {
                 read -p "准备就绪后，按回车键唤醒 nano 编辑器..." temp
                 nano "$YAML_FILE"
                 echo -e "${C_GREEN}✅ 手动合并结束。${C_RESET}"
-            elif [ "$c_opt" == "2" ]; then
-                backup_compose_yaml
-                echo "version: '3.8'" > "$YAML_FILE"
-                echo "" >> "$YAML_FILE"
-                echo "services:" >> "$YAML_FILE"
-                echo "$CLEAN_BLOCK" >> "$YAML_FILE"
-                echo -e "${C_GREEN}✅ 已物理清除旧档案，全新模块写入成功！${C_RESET}"
             else
                 echo -e "${C_GRAY}操作已取消。${C_RESET}"
                 return
             fi
         else
             backup_compose_yaml
+            # 确保以换行结尾再追加
+            [ -s "$YAML_FILE" ] && [ "$(tail -c 1 "$YAML_FILE" | wc -l)" -eq 0 ] && echo "" >> "$YAML_FILE"
             echo "$CLEAN_BLOCK" >> "$YAML_FILE"
-            echo -e "${C_GREEN}✅ 无冲突！已将新模块无缝拼接到本地配置末尾。${C_RESET}"
+            echo -e "${C_GREEN}✅ 无冲突！已将新模块拼接到本地配置末尾。${C_RESET}"
         fi
     fi
 
