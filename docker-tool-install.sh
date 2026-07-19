@@ -720,8 +720,8 @@ manage_service() {
         echo " 3) 启动 (Start)"
         echo " 4) 重启 (Restart)"
         echo " 5) 停止 (Stop)"
-        echo " 6) 卸载 (清除容器 + 清理 compose 配置，保留数据目录)"
-        echo " 7) 抹除 (深度清除容器、挂载目录与 compose 配置)"
+        echo " 6) 卸载 (完整清理：容器 + 数据目录 + compose，便于干净重装)"
+        echo " 7) 抹除 (同卸载：容器 + 数据目录 + compose 全部清除)"
         echo " 8) 查看初始化信息 (登录地址/密钥)"
         echo " 0) 返回上层大厅"
         echo -e "${LINE_GRAY}"
@@ -753,19 +753,13 @@ manage_service() {
                 docker compose stop "${SVC_KEYS[@]}"
                 read -p "操作完毕，回车继续..." temp
                 ;;
-            6)
-                echo -e "${C_YELLOW}🗑️ 正在卸载：清除容器，并同步清理 docker-compose.yml 服务配置...${C_RESET}"
-                echo -e "${C_GRAY}（数据目录默认保留；若要连数据一起删请用 7 抹除）${C_RESET}"
-                cd "$DOCKER_ROOT" || return
-                docker compose stop "${SVC_KEYS[@]}" 2>/dev/null
-                docker compose rm -f -s "${SVC_KEYS[@]}" 2>/dev/null
-                # 卸载同样自动清理 compose 遗留服务块
-                _remove_services_from_compose "${SVC_KEYS[@]}"
-                echo -e "${C_GREEN}✅ 卸载完成：容器已删除，compose 配置已清理；数据目录仍保留在 ${DOCKER_ROOT}/ 下。${C_RESET}"
-                read -p "回车继续..." temp
-                ;;
-            7)
-                read -p "⚠️ 极危警告：确定要彻底销毁容器、删除挂载数据，并自动清除 docker-compose.yml 中的服务配置吗？[y/N]: " is_del
+            6|7)
+                # 卸载/抹除统一做完整清理：旧数据/旧配置会影响重装（密钥、SQLite、auths 等）
+                local wipe_hint="卸载"
+                [ "$SUB_OPT" = "7" ] && wipe_hint="抹除"
+                echo -e "${C_YELLOW}⚠️ ${wipe_hint}将删除：容器 + 数据目录 + docker-compose 服务配置${C_RESET}"
+                echo -e "${C_GRAY}（重装前建议完整清理，避免旧密钥/数据库/插件目录互相干扰）${C_RESET}"
+                read -p "确认继续？[y/N]: " is_del
                 if [[ "$is_del" =~ ^[Yy]$ ]]; then
                     cd "$DOCKER_ROOT" || return
                     docker compose stop "${SVC_KEYS[@]}" 2>/dev/null
@@ -773,18 +767,18 @@ manage_service() {
                     for k in "${SVC_KEYS[@]}"; do
                         if [ -d "${DOCKER_ROOT}/${k}" ]; then
                             sudo rm -rf "${DOCKER_ROOT}/${k}"
+                            echo -e "${C_GRAY}  已删除目录: ${DOCKER_ROOT}/${k}${C_RESET}"
                         fi
                     done
-                    # CPA 栈额外目录
-                    if echo "${SVC_KEYS[*]}" | grep -qw "cli-proxy-api"; then
-                        [ -d "${DOCKER_ROOT}/cli-proxy-api" ] && sudo rm -rf "${DOCKER_ROOT}/cli-proxy-api"
-                        [ -d "${DOCKER_ROOT}/cpa-manager-plus" ] && sudo rm -rf "${DOCKER_ROOT}/cpa-manager-plus"
+                    # CPA 栈额外目录（init 信息、auths、config 等）
+                    if echo "${SVC_KEYS[*]}" | grep -qw "cli-proxy-api" || echo "${SVC_KEYS[*]}" | grep -qw "cpa-manager-plus"; then
+                        [ -d "${DOCKER_ROOT}/cli-proxy-api" ] && sudo rm -rf "${DOCKER_ROOT}/cli-proxy-api" && echo -e "${C_GRAY}  已删除目录: ${DOCKER_ROOT}/cli-proxy-api${C_RESET}"
+                        [ -d "${DOCKER_ROOT}/cpa-manager-plus" ] && sudo rm -rf "${DOCKER_ROOT}/cpa-manager-plus" && echo -e "${C_GRAY}  已删除目录: ${DOCKER_ROOT}/cpa-manager-plus${C_RESET}"
                     fi
-                    # 自动清理 compose 遗留服务块
                     _remove_services_from_compose "${SVC_KEYS[@]}"
-                    echo -e "${C_GREEN}✅ 抹除完成：容器、数据目录与 compose 配置均已清除。${C_RESET}"
+                    echo -e "${C_GREEN}✅ ${wipe_hint}完成：容器、数据与 compose 配置均已清除，可直接选 1 重新安装。${C_RESET}"
                 else
-                    echo -e "${C_GRAY}数据销毁动作已终止。${C_RESET}"
+                    echo -e "${C_GRAY}已取消。${C_RESET}"
                 fi
                 read -p "回车继续..." temp
                 ;;
