@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
 #START
 #NAME:探针监控komari
@@ -87,7 +85,6 @@ services:
   # 对齐官方 docker-compose：多端口为 OAuth/回调/插件本地监听；auths 持久化避免重复装插件
   cli-proxy-api:
     image: eceasy/cli-proxy-api:latest
-    pull_policy: always
     container_name: cli-proxy-api
     restart: unless-stopped
     ports:
@@ -111,7 +108,6 @@ services:
       start_period: 20s
   cpa-manager-plus:
     image: seakee/cpa-manager-plus:latest
-    pull_policy: always
     container_name: cpa-manager-plus
     restart: unless-stopped
     ports:

@@ -270,14 +270,13 @@ _extract_service_keys() {
 }
 
 # 按依赖顺序拉起服务：CPA 先起并等端口就绪，再起 CPAMP
+# 默认不 pull 镜像（避免 Docker Hub 瞬时失败拖垮启动）；需要更新请用菜单 2
 _compose_up_services_ordered() {
     local -a keys=("$@")
     if [ ${#keys[@]} -eq 0 ]; then
         return 0
     fi
 
-    # 一般情况：一次 up 即可（compose 会尊重 depends_on）
-    # CPA 栈：显式先 up cli-proxy-api，再 up 其余，避免 plus 先就绪却连不上 CPA
     local has_cpa=0 has_cpamp=0
     local k
     for k in "${keys[@]}"; do
@@ -285,14 +284,18 @@ _compose_up_services_ordered() {
         [ "$k" = "cpa-manager-plus" ] && has_cpamp=1
     done
 
+    # compose v2 支持 --pull never；老版本忽略失败则回退无 flag
+    local pull_flag=(--pull never)
+    if ! docker compose up -h 2>&1 | grep -q -- '--pull'; then
+        pull_flag=()
+    fi
+
     if [ "$has_cpa" -eq 1 ] && [ "$has_cpamp" -eq 1 ]; then
         echo -e "${C_CYAN}① 先启动 CPA 核心: cli-proxy-api ...${C_RESET}"
-        docker compose up -d cli-proxy-api
-        # 等 CPA 端口起来（最多约 60s）
+        docker compose up -d "${pull_flag[@]}" cli-proxy-api
         local i
         for i in $(seq 1 30); do
             if docker compose ps cli-proxy-api 2>/dev/null | grep -qiE "Up|running"; then
-                # 容器在跑即可；HTTP 可能还没 ready，再给几秒
                 if curl -fsS -m 2 -o /dev/null "http://127.0.0.1:8317/" 2>/dev/null \
                     || curl -fsS -m 2 -o /dev/null "http://127.0.0.1:8317/v0/management" 2>/dev/null \
                     || docker compose exec -T cli-proxy-api wget -qO- -T 2 http://127.0.0.1:8317/ >/dev/null 2>&1; then
@@ -302,7 +305,7 @@ _compose_up_services_ordered() {
             fi
             sleep 2
             if [ "$i" -eq 30 ]; then
-                echo -e "${C_YELLOW}   提示: cli-proxy-api 启动较慢或端口未响应，继续拉起 CPAMP（depends_on 仍会约束顺序）${C_RESET}"
+                echo -e "${C_YELLOW}   提示: cli-proxy-api 启动较慢或端口未响应，继续拉起 CPAMP${C_RESET}"
             fi
         done
         echo -e "${C_CYAN}② 再启动监控面板: cpa-manager-plus ...${C_RESET}"
@@ -311,9 +314,9 @@ _compose_up_services_ordered() {
             [ "$k" = "cli-proxy-api" ] && continue
             rest+=("$k")
         done
-        docker compose up -d "${rest[@]}"
+        docker compose up -d "${pull_flag[@]}" "${rest[@]}"
     else
-        docker compose up -d "${keys[@]}"
+        docker compose up -d "${pull_flag[@]}" "${keys[@]}"
     fi
 }
 
@@ -773,18 +776,20 @@ _append_app_to_compose() {
     local yaml="$YAML_FILE"
 
     if [ ! -f "$yaml" ]; then
-        echo "version: '3.8'" > "$yaml"
-        echo "" >> "$yaml"
-        echo "services:" >> "$yaml"
+        echo "services:" > "$yaml"
     elif ! grep -qE "^services:" "$yaml" 2>/dev/null; then
         # 异常文件：补 services 头
         {
-            echo "version: '3.8'"
-            echo ""
             echo "services:"
             cat "$yaml"
         } > "${yaml}.fix.$$" && mv "${yaml}.fix.$$" "$yaml"
     fi
+
+    # 去掉已过时的 version 字段告警
+    if grep -qE "^version:" "$yaml" 2>/dev/null; then
+        grep -vE "^version:" "$yaml" > "${yaml}.nov.$$" && mv "${yaml}.nov.$$" "$yaml"
+    fi
+
 
     # 确保文件以换行结尾
     [ -s "$yaml" ] && [ "$(tail -c 1 "$yaml" | wc -l)" -eq 0 ] && echo "" >> "$yaml"
@@ -940,15 +945,25 @@ manage_service() {
                 _install_service "$SELECTED_NAME" "$RAW_BLOCK" "$SVC_KEY"
                 ;;
             2)
-                echo -e "${C_CYAN}🔄 正在追溯最新镜像...${C_RESET}"
+                echo -e "${C_CYAN}🔄 正在拉取最新镜像（仅此步骤会访问镜像仓库）...${C_RESET}"
                 cd "$DOCKER_ROOT" || return
-                docker compose pull "${SVC_KEYS[@]}"
+                # 分镜像拉取，单个失败不阻断其它
+                local pk
+                for pk in "${SVC_KEYS[@]}"; do
+                    echo -e "${C_GRAY}  pull ${pk} ...${C_RESET}"
+                    if docker compose pull "$pk"; then
+                        echo -e "${C_GREEN}  ✓ ${pk}${C_RESET}"
+                    else
+                        echo -e "${C_YELLOW}  ⚠ ${pk} 拉取失败，将尝试使用本地已有镜像启动${C_RESET}"
+                    fi
+                done
+                echo -e "${C_CYAN}🔄 使用本地镜像重启服务（不再 pull）...${C_RESET}"
                 _compose_up_services_ordered "${SVC_KEYS[@]}"
                 read -p "操作完毕，回车继续..." temp
                 ;;
             3)
                 cd "$DOCKER_ROOT" || return
-                # start 失败则按顺序 up
+                # start 失败则按顺序 up（不 pull）
                 docker compose start "${SVC_KEYS[@]}" 2>/dev/null || _compose_up_services_ordered "${SVC_KEYS[@]}"
                 read -p "操作完毕，回车继续..." temp
                 ;;
