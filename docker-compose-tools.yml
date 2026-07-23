@@ -98,8 +98,12 @@ services:
       - ./cli-proxy-api/config.yaml:/CLIProxyAPI/config.yaml
       - ./cli-proxy-api/auths:/root/.cli-proxy-api
       - ./cli-proxy-api/logs:/CLIProxyAPI/logs
-      # 插件目录必须持久化，否则容器重建后 .so 丢失；并需 config 里 plugins.enabled=true
+      # 插件 .so 持久化
       - ./cli-proxy-api/plugins:/CLIProxyAPI/plugins
+      # 插件运行时数据（多数插件写这里）
+      - ./cli-proxy-api/data:/CLIProxyAPI/data
+      # cpa-key-policy 等插件把密钥策略写在工作目录 state 文件，必须单独挂载否则更新丢配置
+      - ./cli-proxy-api/cpa-key-policy-state.json:/CLIProxyAPI/cpa-key-policy-state.json
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- -T 3 http://127.0.0.1:8317/ >/dev/null 2>&1 || exit 0"]
       interval: 10s

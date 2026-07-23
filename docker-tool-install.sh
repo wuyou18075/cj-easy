@@ -446,7 +446,12 @@ _write_cpa_config_yaml() {
     local conf_dir="${DOCKER_ROOT}/cli-proxy-api"
     local conf_file="${conf_dir}/config.yaml"
 
-    mkdir -p "${conf_dir}/auths" "${conf_dir}/logs" "${conf_dir}/plugins" "${DOCKER_ROOT}/cpa-manager-plus/data"
+    mkdir -p "${conf_dir}/auths" "${conf_dir}/logs" "${conf_dir}/plugins" "${conf_dir}/data" "${DOCKER_ROOT}/cpa-manager-plus/data"
+    # cpa-key-policy 等插件状态文件：compose 会 bind mount，文件必须事先存在
+    if [ ! -f "${conf_dir}/cpa-key-policy-state.json" ]; then
+        echo '{}' > "${conf_dir}/cpa-key-policy-state.json"
+        chmod 600 "${conf_dir}/cpa-key-policy-state.json" 2>/dev/null || true
+    fi
 
     # 简单转义双引号，避免破坏 YAML
     local esc_mgmt esc_api
