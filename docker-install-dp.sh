@@ -591,8 +591,20 @@ list_default_path_compose() {
     (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" config --services 2>/dev/null) \
         || echo -e "\033[33m(无法解析 services)\033[0m"
     echo "--------------------------------------------------------------------------------"
-    echo -e "\033[36m--- 容器状态 (compose ps -a) ---\033[0m"
-    (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" ps -a 2>/dev/null) \
+    echo -e "\033[36m--- 容器状态 ---\033[0m"
+    # 不显示 CREATED 列
+    (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" ps -a --format "table {{.Name}}\t{{.Image}}\t{{.Service}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null) \
+        || (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" ps -a 2>/dev/null | awk '{
+            # 回退：尽量去掉 Created 列（表头含 CREATED 时）
+            if (NR==1) {
+                for (i=1;i<=NF;i++) if (toupper($i)=="CREATED") skip=i
+                line=""
+                for (i=1;i<=NF;i++) if (i!=skip) line=line $i (i<NF?"\t":"")
+                print line
+                next
+            }
+            print
+        }') \
         || echo -e "\033[33m(无法获取 compose 状态)\033[0m"
     echo "--------------------------------------------------------------------------------"
     echo -e "提示: 查看/编辑完整配置请用菜单「查看百宝箱默认 Compose」；安装应用请用「Docker 安全百宝箱」"
@@ -637,7 +649,9 @@ while true; do
             else
                 echo -e "\n--- 当前路径容器状态 ---"
                 echo -e "工作目录: \033[33m$(pwd)\033[0m"
-                docker compose ps -a
+                # 不显示 CREATED 列
+                docker compose ps -a --format "table {{.Name}}\t{{.Image}}\t{{.Service}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null \
+                    || docker compose ps -a
             fi
             ;;
         4)
