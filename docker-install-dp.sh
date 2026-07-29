@@ -398,6 +398,159 @@ view_toolbox_compose() {
     esac
 }
 
+# 全局容器盘点 + 按序号操作
+manage_global_containers() {
+    while true; do
+        clear
+        echo -e "📦 \033[1;34m全局所有容器盘点\033[0m"
+        echo "--------------------------------------------------------------------------------"
+
+        if ! command -v docker >/dev/null 2>&1; then
+            echo -e "\033[31m❌ 未检测到 docker 命令。\033[0m"
+            return 1
+        fi
+
+        mapfile -t CONTAINERS < <(docker ps -a --format "{{.Names}}" 2>/dev/null)
+        if [ ${#CONTAINERS[@]} -eq 0 ]; then
+            echo -e "\033[33m⚠️  当前没有任何容器。\033[0m"
+            return 0
+        fi
+
+        printf "  \033[36m%-4s %-24s %-28s %s\033[0m\n" "序号" "名称" "状态" "端口"
+        echo "--------------------------------------------------------------------------------"
+        local i
+        for i in "${!CONTAINERS[@]}"; do
+            local name status ports
+            name="${CONTAINERS[$i]}"
+            status=$(docker ps -a --filter "name=^${name}$" --format "{{.Status}}" 2>/dev/null | head -n1)
+            ports=$(docker ps -a --filter "name=^${name}$" --format "{{.Ports}}" 2>/dev/null | head -n1)
+            [ -z "$ports" ] && ports="-"
+            printf "  \033[33m%-4s\033[0m %-24s %-28s %s\n" "$((i+1))" "$name" "$status" "$ports"
+        done
+        echo "--------------------------------------------------------------------------------"
+        echo " 0) 返回主菜单"
+        echo "--------------------------------------------------------------------------------"
+        read -r -p "请输入要操作的容器序号: " idx
+
+        if [ "$idx" = "0" ] || [ -z "$idx" ]; then
+            return 0
+        fi
+        if ! [[ "$idx" =~ ^[0-9]+$ ]] || [ "$idx" -lt 1 ] || [ "$idx" -gt "${#CONTAINERS[@]}" ]; then
+            echo -e "\033[31m❌ 无效序号。\033[0m"
+            sleep 1
+            continue
+        fi
+
+        local cname="${CONTAINERS[$((idx-1))]}"
+        manage_one_container "$cname"
+    done
+}
+
+# 对单个容器的操作菜单
+manage_one_container() {
+    local cname="$1"
+    while true; do
+        clear
+        local status ports image
+        status=$(docker ps -a --filter "name=^${cname}$" --format "{{.Status}}" 2>/dev/null | head -n1)
+        ports=$(docker ps -a --filter "name=^${cname}$" --format "{{.Ports}}" 2>/dev/null | head -n1)
+        image=$(docker ps -a --filter "name=^${cname}$" --format "{{.Image}}" 2>/dev/null | head -n1)
+        echo -e "⚙️  \033[1;34m容器操作: \033[33m${cname}\033[0m"
+        echo "--------------------------------------------------------------------------------"
+        echo -e " 镜像: ${image}"
+        echo -e " 状态: ${status}"
+        echo -e " 端口: ${ports:--}"
+        echo "--------------------------------------------------------------------------------"
+        echo " 1) 重启"
+        echo " 2) 停止"
+        echo " 3) 启动"
+        echo " 4) 更新镜像并重启 (pull + recreate)"
+        echo " 5) 停止并删除容器 (不删挂载数据卷/目录)"
+        echo " 6) 查看动态日志 (最近200行并跟踪)"
+        echo " 7) 查看日志详情 (最近200行静态)"
+        echo " 8) 进入容器 Shell (bash/sh)"
+        echo " 0) 返回容器列表"
+        echo "--------------------------------------------------------------------------------"
+        read -r -p "请选择操作 [0-8]: " op
+
+        case $op in
+            1)
+                echo -e "\033[36m🔄 正在重启 ${cname} ...\033[0m"
+                docker restart "$cname" && echo -e "\033[32m✅ 已重启\033[0m" || echo -e "\033[31m❌ 重启失败\033[0m"
+                read -r -p "回车继续..." _
+                ;;
+            2)
+                echo -e "\033[36m⏹  正在停止 ${cname} ...\033[0m"
+                docker stop "$cname" && echo -e "\033[32m✅ 已停止\033[0m" || echo -e "\033[31m❌ 停止失败\033[0m"
+                read -r -p "回车继续..." _
+                ;;
+            3)
+                echo -e "\033[36m▶  正在启动 ${cname} ...\033[0m"
+                docker start "$cname" && echo -e "\033[32m✅ 已启动\033[0m" || echo -e "\033[31m❌ 启动失败\033[0m"
+                read -r -p "回车继续..." _
+                ;;
+            4)
+                echo -e "\033[36m📥 正在拉取镜像并重建 ${cname} ...\033[0m"
+                # 优先用 compose（若在默认路径能识别该服务）
+                local recreated=0
+                if [ -f "$TOOLBOX_COMPOSE_FILE" ]; then
+                    if (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$cname"); then
+                        (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" pull "$cname" && docker compose -f "$TOOLBOX_COMPOSE_FILE" up -d "$cname") \
+                            && recreated=1
+                    fi
+                fi
+                if [ "$recreated" -eq 0 ]; then
+                    # 非 compose 管理的容器：只 pull 镜像再 restart（无法完整 recreate 参数）
+                    if [ -n "$image" ]; then
+                        docker pull "$image" || echo -e "\033[33m⚠️  pull 失败，将尝试用本地镜像重启\033[0m"
+                    fi
+                    docker restart "$cname" && recreated=1
+                fi
+                if [ "$recreated" -eq 1 ]; then
+                    echo -e "\033[32m✅ 更新/重启流程已执行\033[0m"
+                else
+                    echo -e "\033[31m❌ 操作失败\033[0m"
+                fi
+                read -r -p "回车继续..." _
+                ;;
+            5)
+                read -r -p "⚠️ 确认停止并删除容器 ${cname}？数据目录默认保留 [y/N]: " yn
+                if [[ "$yn" =~ ^[Yy]$ ]]; then
+                    docker stop "$cname" 2>/dev/null
+                    docker rm -f "$cname" && echo -e "\033[32m✅ 容器已删除\033[0m" || echo -e "\033[31m❌ 删除失败\033[0m"
+                    read -r -p "回车返回列表..." _
+                    return 0
+                else
+                    echo "已取消。"
+                    sleep 0.8
+                fi
+                ;;
+            6)
+                echo -e "\033[36m📜 动态日志（最近200行，Ctrl+C 结束跟踪）...\033[0m"
+                docker logs -f --tail 200 "$cname" || true
+                read -r -p "回车继续..." _
+                ;;
+            7)
+                echo -e "\033[36m📜 日志详情（最近200行）...\033[0m"
+                echo "--------------------------------------------------------------------------------"
+                docker logs --tail 200 "$cname" 2>&1 || true
+                echo "--------------------------------------------------------------------------------"
+                read -r -p "回车继续..." _
+                ;;
+            8)
+                echo -e "\033[36m🐚 进入容器（退出请输入 exit）...\033[0m"
+                docker exec -it "$cname" bash 2>/dev/null || docker exec -it "$cname" sh || echo -e "\033[31m❌ 无法进入容器\033[0m"
+                read -r -p "回车继续..." _
+                ;;
+            0) return 0 ;;
+            *)
+                echo -e "\033[31m选择无效。\033[0m"
+                sleep 0.8
+                ;;
+        esac
+    done
+}
+
 # 列出默认路径 /app/docker 的 Compose 服务与容器状态
 list_default_path_compose() {
     clear
@@ -409,13 +562,13 @@ list_default_path_compose() {
 
     if [ ! -d "$TOOLBOX_DOCKER_ROOT" ]; then
         echo -e "\033[33m⚠️  默认目录不存在。\033[0m"
-        echo "请先进入「5 Docker 安全百宝箱」安装任意应用。"
+        echo "请先进入「Docker 安全百宝箱」安装任意应用。"
         return 0
     fi
 
     if [ ! -f "$TOOLBOX_COMPOSE_FILE" ]; then
         echo -e "\033[33m⚠️  尚未生成 docker-compose.yml。\033[0m"
-        echo "请先进入「5 Docker 安全百宝箱」安装任意应用后，才会自动写入。"
+        echo "请先进入「Docker 安全百宝箱」安装任意应用后，才会自动写入。"
         echo
         echo -e "\033[36m--- 目录内容 ---\033[0m"
         ls -la "$TOOLBOX_DOCKER_ROOT" 2>/dev/null || true
@@ -435,7 +588,7 @@ list_default_path_compose() {
     (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" ps -a 2>/dev/null) \
         || echo -e "\033[33m(无法获取 compose 状态)\033[0m"
     echo "--------------------------------------------------------------------------------"
-    echo -e "提示: 查看/编辑完整配置请用菜单 \033[33m8\033[0m；安装应用请用菜单 \033[33m5\033[0m"
+    echo -e "提示: 查看/编辑完整配置请用菜单「查看百宝箱默认 Compose」；安装应用请用「Docker 安全百宝箱」"
 }
 
 if [ "$1" == "-f" ]; then
@@ -481,8 +634,7 @@ while true; do
             fi
             ;;
         4)
-            echo -e "\n--- 全局容器盘点 ---"
-            docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            manage_global_containers
             ;;
         5)
             echo -e "\n--- 全局虚拟网络集群 ---"
