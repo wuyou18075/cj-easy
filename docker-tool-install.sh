@@ -515,6 +515,16 @@ _install_service() {
     echo -e "${LINE_GRAY}"
     echo -e "${C_YELLOW}💡 有默认值的项：直接回车 = 使用默认值；输入新值后回车 = 覆盖默认值。${C_RESET}"
     echo -e "${C_YELLOW}💡 无默认值的密钥/密码项：必须手动输入（可自行设定）。${C_RESET}"
+    # New API 安装前特别提示：需先有 Postgres 库
+    if echo "${SVC_KEYS[*]}" | grep -qw "new-api" || [ "$NAME" = "New API" ]; then
+        echo -e "${LINE_GRAY}"
+        echo -e "${C_CYAN}📌 New API 安装前请确认：${C_RESET}"
+        echo -e "  1) PostgreSQL、Redis 已在运行（可用百宝箱安装）"
+        echo -e "  2) 若还没有 new_api 数据库，请先在已有 postgres 容器中执行："
+        echo -e "     ${C_YELLOW}docker exec -it postgres psql -U postgres -c \"CREATE DATABASE new_api;\"${C_RESET}"
+        echo -e "  3) 用户名/密码/端口若与默认不同，安装时请改 SQL_DSN、REDIS 连接串"
+        echo -e "  4) 库已存在会报 already exists，可忽略，直接继续安装"
+    fi
     echo -e "${LINE_GRAY}"
 
     # 动态解析参数，支持 #PARAM_KEY:描述=默认值
@@ -675,6 +685,8 @@ _install_service() {
             echo "  数据目录:   ${DOCKER_ROOT}/new-api/data"
             echo "  日志目录:   ${DOCKER_ROOT}/new-api/logs"
             echo "  说明: 首次打开面板完成初始化；请确认 Postgres 已建库、Redis 可连"
+            echo "  若无 new_api 库，可执行:"
+            echo "    docker exec -it postgres psql -U postgres -c \"CREATE DATABASE new_api;\""
             echo "  WSL 默认常用:"
             echo "    SQL_DSN 示例: postgresql://用户:密码@host.docker.internal:5432/new_api"
             echo "    REDIS  示例: redis://:密码@host.docker.internal:6379"
