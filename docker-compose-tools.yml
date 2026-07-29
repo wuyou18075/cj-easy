@@ -75,6 +75,43 @@ services:
       retries: 5
 #END
 #START
+#NAME:New API
+#PARAM_PORT:面板端口=3000
+#PARAM_SQL_DSN:PostgreSQL连接串(SQL_DSN)=postgresql://postgres:postgres@host.docker.internal:5432/new_api
+#PARAM_REDIS_CONN:Redis连接串(REDIS_CONN_STRING)=redis://:redis@host.docker.internal:6379
+#PARAM_NODE_NAME:节点名称=new-api-node-1
+#PARAM_TZ:时区=Asia/Shanghai
+#PARAM_STREAMING_TIMEOUT:流式超时秒=300
+  # WSL/Docker Desktop 访问同机其它容器可用 host.docker.internal；同 compose 网络可改为 postgres:5432 / redis:6379
+  # 请先在 Postgres 中建库 new_api（或把连接串库名改成已有库）
+  new-api:
+    image: calciumion/new-api:latest
+    container_name: new-api
+    restart: always
+    command: --log-dir /app/logs
+    ports:
+      - "{PARAM_PORT}:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./new-api/data:/data
+      - ./new-api/logs:/app/logs
+    environment:
+      - SQL_DSN={PARAM_SQL_DSN}
+      - REDIS_CONN_STRING={PARAM_REDIS_CONN}
+      - TZ={PARAM_TZ}
+      - ERROR_LOG_ENABLED=true
+      - BATCH_UPDATE_ENABLED=true
+      - NODE_NAME={PARAM_NODE_NAME}
+      - STREAMING_TIMEOUT={PARAM_STREAMING_TIMEOUT}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- -T 3 http://127.0.0.1:3000/api/status >/dev/null 2>&1 || wget -qO- -T 3 http://127.0.0.1:3000/ >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+#END
+#START
 #NAME:CPA + CPAMP 完整栈
 #PARAM_CPAMP_PORT:CPAMP面板端口=18317
 #PARAM_CPA_PORT:CPA网关端口=8317

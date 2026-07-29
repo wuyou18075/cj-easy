@@ -400,6 +400,7 @@ _show_install_info() {
 
     for cand in \
         "${DOCKER_ROOT}/cpa-manager-plus/INIT_INFO.txt" \
+        "${DOCKER_ROOT}/new-api/INIT_INFO.txt" \
         "${DOCKER_ROOT}/cli-proxy-api/INIT_INFO.txt" \
         "${DOCKER_ROOT}/${keys[0]}/INIT_INFO.txt"
     do
@@ -654,6 +655,33 @@ _install_service() {
             "${VAL_CPA_API_KEY}" \
             "${VAL_CPAMP_PORT:-18317}" \
             "${VAL_CPA_PORT:-8317}"
+    fi
+
+    if echo "${SVC_KEYS[*]}" | grep -qw "new-api"; then
+        local PUB_IP PUB_HOST HOST_PORT
+        echo -e "${C_GRAY}🌐 正在获取公网 IP（优先 IPv4）...${C_RESET}"
+        PUB_IP=$(_get_public_ip)
+        PUB_HOST=$(_format_host_for_url "$PUB_IP")
+        HOST_PORT=$(_get_host_port "new-api" "3000" "3000")
+        mkdir -p "${DOCKER_ROOT}/new-api"
+        local INFO_FILE="${DOCKER_ROOT}/new-api/INIT_INFO.txt"
+        {
+            echo "========================================================="
+            echo " New API 初始化信息"
+            echo " 生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "========================================================="
+            echo "  面板(公网): http://${PUB_HOST}:${HOST_PORT}/"
+            echo "  面板(本机): http://127.0.0.1:${HOST_PORT}/"
+            echo "  数据目录:   ${DOCKER_ROOT}/new-api/data"
+            echo "  日志目录:   ${DOCKER_ROOT}/new-api/logs"
+            echo "  说明: 首次打开面板完成初始化；请确认 Postgres 已建库、Redis 可连"
+            echo "  WSL 默认常用:"
+            echo "    SQL_DSN 示例: postgresql://用户:密码@host.docker.internal:5432/new_api"
+            echo "    REDIS  示例: redis://:密码@host.docker.internal:6379"
+            echo "========================================================="
+        } | tee "$INFO_FILE"
+        chmod 600 "$INFO_FILE" 2>/dev/null || true
+        echo -e "${C_GRAY}  初始化信息已保存，可用控制台【8 查看初始化信息】再次查看。${C_RESET}"
     fi
 
     read -p "按回车键返回上级菜单..." temp
