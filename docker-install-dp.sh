@@ -398,6 +398,46 @@ view_toolbox_compose() {
     esac
 }
 
+# 列出默认路径 /app/docker 的 Compose 服务与容器状态
+list_default_path_compose() {
+    clear
+    echo -e "📂 \033[1;34m默认路径 Compose 列表\033[0m"
+    echo "--------------------------------------------------------------------------------"
+    echo -e "默认目录: \033[33m${TOOLBOX_DOCKER_ROOT}\033[0m"
+    echo -e "Compose:  \033[33m${TOOLBOX_COMPOSE_FILE}\033[0m"
+    echo "--------------------------------------------------------------------------------"
+
+    if [ ! -d "$TOOLBOX_DOCKER_ROOT" ]; then
+        echo -e "\033[33m⚠️  默认目录不存在。\033[0m"
+        echo "请先进入「5 Docker 安全百宝箱」安装任意应用。"
+        return 0
+    fi
+
+    if [ ! -f "$TOOLBOX_COMPOSE_FILE" ]; then
+        echo -e "\033[33m⚠️  尚未生成 docker-compose.yml。\033[0m"
+        echo "请先进入「5 Docker 安全百宝箱」安装任意应用后，才会自动写入。"
+        echo
+        echo -e "\033[36m--- 目录内容 ---\033[0m"
+        ls -la "$TOOLBOX_DOCKER_ROOT" 2>/dev/null || true
+        return 0
+    fi
+
+    if ! command -v docker >/dev/null 2>&1; then
+        echo -e "\033[31m❌ 未检测到 docker 命令。\033[0m"
+        return 1
+    fi
+
+    echo -e "\033[36m--- 服务列表 (config --services) ---\033[0m"
+    (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" config --services 2>/dev/null) \
+        || echo -e "\033[33m(无法解析 services)\033[0m"
+    echo "--------------------------------------------------------------------------------"
+    echo -e "\033[36m--- 容器状态 (compose ps -a) ---\033[0m"
+    (cd "$TOOLBOX_DOCKER_ROOT" && docker compose -f "$TOOLBOX_COMPOSE_FILE" ps -a 2>/dev/null) \
+        || echo -e "\033[33m(无法获取 compose 状态)\033[0m"
+    echo "--------------------------------------------------------------------------------"
+    echo -e "提示: 查看/编辑完整配置请用菜单 \033[33m8\033[0m；安装应用请用菜单 \033[33m5\033[0m"
+}
+
 if [ "$1" == "-f" ]; then
     handle_compose_file_mode
     exit 0
@@ -410,44 +450,49 @@ while true; do
     echo -e "Docker 状态: $(get_docker_status)\tCompose 状态: $(get_compose_status)"
     echo "--------------------------------------------------------------------------------"
     echo " 1 安装/卸载 Docker环境"
-    echo " 2 当前路径 Compose 列表"
-    echo " 3 全局所有容器盘点"
-    echo " 4 全局虚拟网络集群列表"
-    echo " 5 Docker 安全百宝箱"
-    echo " 6 注册为全局 dp 快捷键"
-    echo " 7 在线更新本脚本 (同步 GitHub 最新版)"
-    echo " 8 查看百宝箱默认 Compose 文件 (/app/docker)"
-    echo " 9 列出50条内置命令"
+    echo " 2 默认路径 Compose 列表 (/app/docker)"
+    echo " 3 当前路径 Compose 列表"
+    echo " 4 全局所有容器盘点"
+    echo " 5 全局虚拟网络集群列表"
+    echo " 6 Docker 安全百宝箱"
+    echo " 7 注册为全局 dp 快捷键"
+    echo " 8 在线更新本脚本 (同步 GitHub 最新版)"
+    echo " 9 查看百宝箱默认 Compose 文件 (/app/docker)"
+    echo " 10 列出50条内置命令"
     echo " 0 安全退出控制台"
     echo "--------------------------------------------------------------------------------"
 
     show_education_commands
 
     echo "--------------------------------------------------------------------------------"
-    read -r -p "请选择操作 [0-9]: " m
+    read -r -p "请选择操作 [0-10]: " m
     case $m in
         1) manage_install_uninstall ;;
         2)
+            list_default_path_compose
+            ;;
+        3)
             if [ "$(check_compose_file)" = "false" ]; then
                 echo -e "\n\033[31m⚠️ 提示: 当前目录下未检测到任何 docker-compose.yaml/yml 配置文件！\033[0m"
             else
                 echo -e "\n--- 当前路径容器状态 ---"
-                docker compose ps
+                echo -e "工作目录: \033[33m$(pwd)\033[0m"
+                docker compose ps -a
             fi
             ;;
-        3)
+        4)
             echo -e "\n--- 全局容器盘点 ---"
             docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
             ;;
-        4)
+        5)
             echo -e "\n--- 全局虚拟网络集群 ---"
             docker network ls
             ;;
-        5)
+        6)
             echo -e "\n\033[36m🔄 正在拉取并执行 Docker 安全百宝箱...\033[0m"
             bash <(curl -fsSL "https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/docker-tool-install.sh?v=$(date +%s)")
             ;;
-        6)
+        7)
             echo "正在通过您的远程链接下载并注册全局快捷键 'dp'..."
             if curl -fsSL "${SCRIPT_REMOTE_URL}?v=$(date +%s)" -o "$LOCAL_DP_PATH" && [ -s "$LOCAL_DP_PATH" ]; then
                 chmod +x "$LOCAL_DP_PATH"
@@ -456,13 +501,13 @@ while true; do
                 echo -e "\n\033[31m❌ 注册失败：无法从 GitHub 下载脚本。\033[0m"
             fi
             ;;
-        7)
+        8)
             update_self_script
             ;;
-        8)
+        9)
             view_toolbox_compose
             ;;
-        9)
+        10)
             list_all_50_commands
             ;;
         0)
