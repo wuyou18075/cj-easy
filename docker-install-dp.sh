@@ -428,12 +428,16 @@ manage_global_containers() {
             printf "  \033[33m%-4s\033[0m %-24s %-28s %s\n" "$((i+1))" "$name" "$status" "$ports"
         done
         echo "--------------------------------------------------------------------------------"
-        echo " 0) 返回主菜单"
+        echo " 输入容器序号进行操作；输入 0 返回上一层"
         echo "--------------------------------------------------------------------------------"
-        read -r -p "请输入要操作的容器序号: " idx
+        read -r -p "请输入要操作的容器序号 [0返回上层]: " idx
 
-        if [ "$idx" = "0" ] || [ -z "$idx" ]; then
+        # 仅 0 返回上一层；空回车刷新列表
+        if [ "$idx" = "0" ]; then
             return 0
+        fi
+        if [ -z "$idx" ]; then
+            continue
         fi
         if ! [[ "$idx" =~ ^[0-9]+$ ]] || [ "$idx" -lt 1 ] || [ "$idx" -gt "${#CONTAINERS[@]}" ]; then
             echo -e "\033[31m❌ 无效序号。\033[0m"
@@ -469,9 +473,9 @@ manage_one_container() {
         echo " 6) 查看动态日志 (最近200行并跟踪)"
         echo " 7) 查看日志详情 (最近200行静态)"
         echo " 8) 进入容器 Shell (bash/sh)"
-        echo " 0) 返回容器列表"
+        echo " 0) 返回上一层"
         echo "--------------------------------------------------------------------------------"
-        read -r -p "请选择操作 [0-8]: " op
+        read -r -p "请选择操作 [0-8，0返回上层]: " op
 
         case $op in
             1)
@@ -518,7 +522,7 @@ manage_one_container() {
                 if [[ "$yn" =~ ^[Yy]$ ]]; then
                     docker stop "$cname" 2>/dev/null
                     docker rm -f "$cname" && echo -e "\033[32m✅ 容器已删除\033[0m" || echo -e "\033[31m❌ 删除失败\033[0m"
-                    read -r -p "回车返回列表..." _
+                    read -r -p "回车返回上一层..." _
                     return 0
                 else
                     echo "已取消。"
@@ -542,7 +546,10 @@ manage_one_container() {
                 docker exec -it "$cname" bash 2>/dev/null || docker exec -it "$cname" sh || echo -e "\033[31m❌ 无法进入容器\033[0m"
                 read -r -p "回车继续..." _
                 ;;
-            0) return 0 ;;
+            0|"")
+                # 0 或空回车：返回上一层（容器列表）
+                return 0
+                ;;
             *)
                 echo -e "\033[31m选择无效。\033[0m"
                 sleep 0.8
@@ -634,7 +641,9 @@ while true; do
             fi
             ;;
         4)
+            # 子菜单内用 0 返回上一层，返回后直接回主菜单，不再多一次回车
             manage_global_containers
+            continue
             ;;
         5)
             echo -e "\n--- 全局虚拟网络集群 ---"
