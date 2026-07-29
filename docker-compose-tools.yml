@@ -79,7 +79,7 @@ services:
 #PARAM_PORT:面板端口=3000
 #PARAM_SQL_DSN:PostgreSQL连接串 格式postgresql://用户名:密码@主机:端口/库名=postgresql://postgres:postgres@host.docker.internal:5432/new_api
 #PARAM_REDIS_CONN:Redis连接串 格式redis://:密码@主机:端口=redis://:redis@host.docker.internal:6379
-#PARAM_NODE_NAME:节点名称=new-api-node-1
+#PARAM_NODE_NAME:节点名称=new-api
 #PARAM_TZ:时区=Asia/Shanghai
 #PARAM_STREAMING_TIMEOUT:流式超时秒=300
   # WSL/Docker Desktop 访问同机其它容器可用 host.docker.internal；同 compose 网络可改为 postgres:5432 / redis:6379
