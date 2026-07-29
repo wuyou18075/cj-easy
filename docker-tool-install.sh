@@ -270,7 +270,7 @@ _extract_service_keys() {
 }
 
 # 按依赖顺序拉起服务：CPA 先起并等端口就绪，再起 CPAMP
-# 默认不 pull 镜像（避免 Docker Hub 瞬时失败拖垮启动）；需要更新请用菜单 2
+# 默认不 pull 已有镜像；本地缺失时会先 pull 再 up（首次安装必需）
 _compose_up_services_ordered() {
     local -a keys=("$@")
     if [ ${#keys[@]} -eq 0 ]; then
@@ -284,7 +284,29 @@ _compose_up_services_ordered() {
         [ "$k" = "cpa-manager-plus" ] && has_cpamp=1
     done
 
-    # compose v2 支持 --pull never；老版本忽略失败则回退无 flag
+    # 本地没有镜像时先拉取（避免 --pull never 导致 No such image）
+    local img
+    for k in "${keys[@]}"; do
+        img=$(docker compose config --images "$k" 2>/dev/null | head -n 1 | tr -d '\r')
+        if [ -z "$img" ]; then
+            # 回退：从运行中的 compose 文件粗解析 image:
+            img=$(docker compose config 2>/dev/null | awk -v svc="$k" '
+                $0 ~ "^  "svc":" {in_svc=1; next}
+                in_svc && /^  [a-zA-Z0-9_-]+:/ {in_svc=0}
+                in_svc && $1=="image:" {print $2; exit}
+            ' | tr -d '"\r')
+        fi
+        if [ -n "$img" ] && ! docker image inspect "$img" >/dev/null 2>&1; then
+            echo -e "${C_CYAN}📥 本地无镜像 ${img}，正在拉取...${C_RESET}"
+            if ! docker compose pull "$k"; then
+                echo -e "${C_RED}❌ 拉取镜像失败: ${img}${C_RESET}"
+                echo -e "${C_GRAY}可手动执行: docker pull ${img}${C_RESET}"
+                return 1
+            fi
+        fi
+    done
+
+    # compose v2 支持 --pull never；有本地镜像后不再强拉
     local pull_flag=(--pull never)
     if ! docker compose up -h 2>&1 | grep -q -- '--pull'; then
         pull_flag=()
@@ -292,7 +314,10 @@ _compose_up_services_ordered() {
 
     if [ "$has_cpa" -eq 1 ] && [ "$has_cpamp" -eq 1 ]; then
         echo -e "${C_CYAN}① 先启动 CPA 核心: cli-proxy-api ...${C_RESET}"
-        docker compose up -d "${pull_flag[@]}" cli-proxy-api
+        if ! docker compose up -d "${pull_flag[@]}" cli-proxy-api; then
+            echo -e "${C_RED}❌ cli-proxy-api 启动失败${C_RESET}"
+            return 1
+        fi
         local i
         for i in $(seq 1 30); do
             if docker compose ps cli-proxy-api 2>/dev/null | grep -qiE "Up|running"; then
@@ -314,10 +339,17 @@ _compose_up_services_ordered() {
             [ "$k" = "cli-proxy-api" ] && continue
             rest+=("$k")
         done
-        docker compose up -d "${pull_flag[@]}" "${rest[@]}"
+        if ! docker compose up -d "${pull_flag[@]}" "${rest[@]}"; then
+            echo -e "${C_RED}❌ CPAMP 相关服务启动失败${C_RESET}"
+            return 1
+        fi
     else
-        docker compose up -d "${pull_flag[@]}" "${keys[@]}"
+        if ! docker compose up -d "${pull_flag[@]}" "${keys[@]}"; then
+            echo -e "${C_RED}❌ 服务启动失败: ${keys[*]}${C_RESET}"
+            return 1
+        fi
     fi
+    return 0
 }
 
 # 保存并打印 CPA+CPAMP 初始化信息（含 CPA 独立访问）
@@ -661,7 +693,12 @@ _install_service() {
     # 唤醒容器启动流程（支持多服务；CPA 栈强制先 CPA 后 Plus）
     echo -e "${C_CYAN}🚀 正在按依赖顺序拉起服务: ${SVC_KEYS[*]} ...${C_RESET}"
     cd "$DOCKER_ROOT" || return
-    _compose_up_services_ordered "${SVC_KEYS[@]}"
+    if ! _compose_up_services_ordered "${SVC_KEYS[@]}"; then
+        echo -e "${C_RED}❌ 部署未成功完成（镜像拉取或容器启动失败）。${C_RESET}"
+        echo -e "${C_GRAY}可手动: cd ${DOCKER_ROOT} && docker compose pull ${SVC_KEYS[*]} && docker compose up -d ${SVC_KEYS[*]}${C_RESET}"
+        read -p "按回车键返回上级菜单..." temp
+        return 1
+    fi
     echo -e "${C_GREEN}🎉 部署动作全部完成！${C_RESET}"
 
 
