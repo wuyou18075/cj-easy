@@ -44,12 +44,6 @@ bash <(curl -fsSL "https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/hea
 dp
 ```
 
-### 4️⃣ VPS Telegram Bot 安装
-
-```bash
-bash <(curl -fsSL "https://raw.githubusercontent.com/wuyou18075/cj-easy/refs/heads/main/vps-tg-bot-install.sh?v=$(date +%s)")
-```
-
 ---
 
 ## 主程序（install.sh / cj）功能范围
